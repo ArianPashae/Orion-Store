@@ -56,13 +56,21 @@
 <a href="https://trendshift.io/repositories/15654?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-15654" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/15654/daily?language=TypeScript" alt="RookieEnough%2FOrion-Store | Trendshift" width="250" height="55"/></a>
 </p>
 
-## A note on "trackers" :mag:
+<details>
+<summary><b>🔍 Transparency note: what the "trackers" actually are</b></summary>
 
-If a scanner like AppManager flags Orion Store for trackers, here is the full story.
+Some scanner apps (like AppManager) flag Orion Store for containing trackers. Here is exactly what that means.
 
-The only thing that gets flagged is the **Unity Ads SDK**. It exists for exactly one feature: the optional ad-watching in the **About** tab (Fuel the Code), where you can watch ads to support me and earn XP plus unlock badges. That is all it does.
+The only flagged component is the **Unity Ads SDK**. It exists for a single feature: the optional ad-watching in the **About** tab (*Fuel the Code*), where watching ads supports development and earns you XP plus unlocks badges. That is all it does.
 
-No analytics SDKs. No data mining. No data selling. The app is fully open source, so anyone can verify this. And the ads are 100% optional, nothing runs in the background.
+- No analytics SDKs
+- No data mining
+- No data selling
+- 100% optional, nothing runs in the background
+
+Orion Store is fully open source, so anyone can verify this in the code.
+
+</details>
 
 ## Orion Store 2.0 · Native at last :rocket:
 
