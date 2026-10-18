@@ -57,18 +57,26 @@
 </p>
 
 <details>
-<summary><b>🔍 Transparency note: what the "trackers" actually are</b></summary>
+<summary><b>🔍 Orion does not have any trackers!</b></summary>
 
-Some scanner apps (like AppManager) flag Orion Store for containing trackers. Here is exactly what that means.
+Saw a few people asking about the 5 "trackers" flagged in App Manager or TrackerControl, so wanted to clear up what those actually are.
 
-The only flagged component is the **Unity Ads SDK**. It exists for a single feature: the optional ad-watching in the **About** tab (*Fuel the Code*), where watching ads supports development and earns you XP plus unlocks badges. That is all it does.
+**What they actually are:**
 
-- No analytics SDKs
-- No data mining
-- No data selling
-- 100% optional, nothing runs in the background
+- App Manager flags manifest activities from libraries, not active surveillance services.
+- These are literally just the 5 internal screen renderers bundled inside the Unity Ads SDK:
+  - **`AdUnitActivity`**: standard video playback screen
+  - **`FullScreenWebViewDisplay`**: webview player for end cards and interactive screens
+  - **`AdUnitTransparentActivity`**: transparent overlay screen
+  - **`AdUnitSoftwareActivity`** and **`AdUnitTransparentSoftwareActivity`**: fallback renderers for devices that struggle with hardware acceleration
 
-Orion Store is fully open source, so anyone can verify this in the code.
+It is 1 single ad library split across its rendering components, not 5 separate tracking networks.
+
+**How it works in Orion:**
+
+- It only ever touches memory if you explicitly tap to watch a rewarded video in the "Fuel the Code" quest for XP.
+- There are zero background services, no banner ads, and no user data collected or sent anywhere.
+- If you do not care about the rewarded XP quest, you can block all 5 of them right there in App Manager. The store will still work completely fine.
 
 </details>
 
