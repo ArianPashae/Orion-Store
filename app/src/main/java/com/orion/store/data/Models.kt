@@ -96,7 +96,7 @@ data class StoreCollection(
 object Defaults {
     const val CACHE_VERSION = "v1_6"
     const val NETWORK_TIMEOUT_MS = 8000L
-    const val RELEASE_NOTES_URL = "https://raw.githubusercontent.com/RookieEnough/Orion-Data/main/release_notes.json"
+    const val RELEASES_API = "https://api.github.com/repos/RookieEnough/Orion-Store/releases?per_page=8"
     const val MIRROR_JSON = "https://raw.githubusercontent.com/RookieEnough/Orion-Data/data/mirror.json"
     val CONFIG_URLS = listOf(
         "https://raw.githubusercontent.com/RookieEnough/Orion-Data/main/config.json",

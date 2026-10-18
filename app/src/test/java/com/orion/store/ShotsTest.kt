@@ -54,7 +54,7 @@ class ShotsTest {
         SingletonImageLoader.setUnsafe { ImageLoader.Builder(it).allowHardware(false).imageDecoderEnabled(false).build() }
         val vm = MainViewModel(ApplicationProvider.getApplicationContext())
         vm.set { it.copy(hasSeenModernUITutorial = true, seenNativeWelcome = true, theme = System.getProperty("orion.theme") ?: "light") }
-        vm.announcementShown = System.getProperty("orion.shots").orEmpty().contains("ann").not()
+        if (System.getProperty("orion.shots").orEmpty().contains("ann")) vm.announceNow = true
         rule.mainClock.autoAdvance = false
         rule.setContent { OrionRoot(vm) }
         var waited = 0L

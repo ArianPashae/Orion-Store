@@ -110,7 +110,7 @@ fun DinoGameSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
         val hi = maxOf(prevHi, sc); val xp = sc / 100
         vm.set { st ->
             var n = st.updateDinoHighScore(sc)
-            if (xp > 0) n = n.addGameXP(xp.toDouble())
+            if (xp > 0) n = n.addGameXP(xp.toDouble(), System.currentTimeMillis())
             listOf(200L to "Dino Rookie", 600L to "Dino Master", 1500L to "Dino Legend").filter { hi >= it.first }.forEach { n = n.unlockBadge(it.second) }
             n
         }

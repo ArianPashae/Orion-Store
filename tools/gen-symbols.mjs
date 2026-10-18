@@ -17,7 +17,7 @@ VolunteerActivism VpnLock Warning WarningAmber Wifi WifiOff Work WorkspacePremiu
 GridView MoreVert Tune FilterList SwapVert ArrowDropDown IosShare Category Sell Package2 CodeBlocks Mail Report TravelExplore TrendingUp Update
 DownloadForOffline Translate TextFields DesktopWindows Smartphone Widgets Bookmark Explore Vibration ViewAgenda Animation FormatPaint Brightness6 AppsOutage
 ChevronLeft CheckSmall Bedtime NorthEast OpenInFull Celebration Hub Policy Encrypted DataObject Rocket StarRate Swipe AdsClick Sailing
-Tonality Routine WaterDrop Wallpaper Cast Backup DeveloperMode Gesture ViewQuilt ViewStream Flare Stars
+Tonality Routine WaterDrop Wallpaper Cast Backup DeveloperMode Gesture ViewQuilt ViewStream Flare Stars DragHandle Undo Redo
 CallMerge RamenDining Crown Swords Skull Castle Tsunami AllInclusive Hive`.split(/\s+/).filter(Boolean);
 
 // Names whose Material Icons original was the solid half of an outline/solid pair map to FILL 1.

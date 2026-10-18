@@ -121,6 +121,9 @@ private fun Modifier.sharedIcon(key: String?, visible: Boolean): Modifier {
     return with(sc) { this@sharedIcon.sharedElementWithCallerManagedVisibility(rememberSharedContentState(key), visible) }
 }
 
+/** Tablets and landscape: centre the page in a readable column instead of stretching rows across the whole screen. No-op on phones. */
+fun Modifier.readableWidth() = wrapContentWidth().widthIn(max = 840.dp)
+
 /** Squash-on-press with an expressive spatial spring, plus ripple, clipped to [shape]. */
 @Composable
 fun Modifier.springClick(shape: Shape = RoundedCornerShape(20.dp), onLongClick: (() -> Unit)? = null, src: MutableInteractionSource = remember { MutableInteractionSource() }, onClick: () -> Unit): Modifier {
@@ -181,7 +184,7 @@ fun cardState(app: AppItem): Pair<CardState, Float> {
     return when {
         app.id in d.activeDownloads -> CardState.DOWNLOADING to (d.downloadProgress[app.id] ?: 0f)
         app.id in d.readyToInstall -> CardState.READY to 1f
-        hasAvailableUpdate(app, local, s.appStreams[app.id] ?: "Stable") -> CardState.UPDATE to 0f
+        hasAvailableUpdate(app, local, s.streamOf(app.id)) -> CardState.UPDATE to 0f
         !local.isNullOrEmpty() -> CardState.INSTALLED to 0f
         else -> CardState.NONE to 0f
     }
@@ -227,7 +230,7 @@ fun statusText(app: AppItem): Pair<String, Color>? {
     return when (st) {
         CardState.DOWNLOADING -> (if (p > 0f) "Downloading ${p.toInt()}%" else "Starting download") to cs.primary
         CardState.READY -> "Ready to install" to cs.primary
-        CardState.UPDATE -> "Update · v${preferredVersion(app, LocalS.current.appStreams[app.id] ?: "Stable").removePrefix("v")}" to cs.tertiary
+        CardState.UPDATE -> "Update · v${preferredVersion(app, LocalS.current.streamOf(app.id)).removePrefix("v")}" to cs.tertiary
         CardState.INSTALLED -> "Installed · v${local.orEmpty().removePrefix("v")}" to cs.onSurfaceVariant
         CardState.NONE -> null
     }

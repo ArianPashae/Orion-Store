@@ -49,7 +49,7 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
     val visible = rows.filter { it.matches(filter) && it.matchesQuery(query) }
     val queue = d.activeDownloads.size + d.readyToInstall.size
     val cs = MaterialTheme.colorScheme
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+    LazyColumn(Modifier.fillMaxSize().readableWidth(), contentPadding = padding) {
         item("header") { Header(vm) }
         item {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

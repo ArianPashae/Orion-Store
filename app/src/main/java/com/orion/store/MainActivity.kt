@@ -2,6 +2,7 @@ package com.orion.store
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -46,6 +47,8 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // Phones stay portrait; tablets and unfolded foldables rotate freely. A manifest lock forced tablets into a letterboxed portrait window.
+        requestedOrientation = if (resources.configuration.smallestScreenWidthDp >= 600) ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         ResultHost.launch = { i, cb -> pending = cb; results.launch(i) }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         lifecycleScope.launch {
@@ -58,6 +61,8 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); handle(intent) }
 
     override fun onResume() { super.onResume(); vm.onResume() }
+    override fun onStart() { super.onStart(); AutoUpdate.uiVisible = true }
+    override fun onStop() { AutoUpdate.uiVisible = false; super.onStop() }
 
     // Full screen: status bar stays hidden, a swipe from the top peeks it. Re-applied on focus since old APIs drop the flag.
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -70,5 +75,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() { if (ResultHost.launch != null && isFinishing) ResultHost.launch = null; super.onDestroy() }
 
-    private fun handle(i: Intent?) { vm.deepLink(i?.data); vm.onNotificationIntent(i) }
+    private fun handle(i: Intent?) {
+        vm.deepLink(i?.data); vm.onNotificationIntent(i)
+        if (i?.action == Intent.ACTION_SHOW_APP_INFO) i.getStringExtra(Intent.EXTRA_PACKAGE_NAME)?.let(vm::showAppInfo)
+    }
 }

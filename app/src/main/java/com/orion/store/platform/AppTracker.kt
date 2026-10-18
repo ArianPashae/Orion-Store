@@ -155,11 +155,21 @@ class AppTracker(private val ctx: Context) {
 
     fun icon(pkg: String): Bitmap? = runCatching { pm.getApplicationIcon(pkg).toBitmap(144, 144) }.getOrNull()
 
-    // Shizuku
+    // Elevated shell: root when Root mode is on, otherwise Shizuku. Every privileged tool goes through [sh], so both work everywhere.
+    @Volatile var root = false
     fun shizukuRunning() = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
-    fun shizukuReady() = runCatching { Shizuku.pingBinder() && Shizuku.checkSelfPermission() == GRANTED }.getOrDefault(false)
+    fun elevatedReady() = root || runCatching { Shizuku.pingBinder() && Shizuku.checkSelfPermission() == GRANTED }.getOrDefault(false)
 
-    suspend fun requestShizuku() {
+    /** Asks the root manager for `su` (Magisk, KernelSU and APatch show their grant prompt here). */
+    suspend fun requestRoot(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val p = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
+            p.waitFor(30, TimeUnit.SECONDS) && p.exitValue() == 0 && "uid=0" in p.inputStream.bufferedReader().readText()
+        }.getOrDefault(false)
+    }
+
+    suspend fun requestElevated() {
+        if (root) return
         try {
             if (!Shizuku.pingBinder()) throw NativeError("Shizuku is NOT running. Start Shizuku app first.")
             if (Shizuku.checkSelfPermission() == GRANTED) return
@@ -177,24 +187,53 @@ class AppTracker(private val ctx: Context) {
         } catch (e: NativeError) { throw e } catch (e: Throwable) { throw NativeError("Shizuku Error (Check Manifest/Provider): ${e.message}") }
     }
 
-    private fun sh(cmd: String): Process = Shizuku::class.java
+    private fun sh(cmd: String): Process = if (root) Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)) else Shizuku::class.java
         .getDeclaredMethod("newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java)
         .apply { isAccessible = true }.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
 
     private fun Process.err() = errorStream.bufferedReader().readText()
 
     private fun requireShizuku() {
+        if (root) return
         if (!shizukuRunning()) throw NativeError("Shizuku not running")
         if (Shizuku.checkSelfPermission() != GRANTED) throw NativeError("Shizuku permission missing")
     }
 
-    suspend fun installShizuku(fileName: String) = withContext(Dispatchers.IO) {
+    /** Streams the APK into `pm install`. Root also records Orion as the installer, so Android's "App details in store" and update ownership point here. */
+    suspend fun installShizuku(fileName: String, lock: Boolean = false) = withContext(Dispatchers.IO) {
         val f = resolve(fileName)
-        if (!shizukuRunning()) throw NativeError("Shizuku is NOT running.")
-        if (Shizuku.checkSelfPermission() != GRANTED) throw NativeError("PERMISSION_DENIED")
-        val p = sh("pm install -r --restrict-permissions -S ${f.length()}")
-        p.outputStream.use { o -> f.inputStream().use { it.copyTo(o) } }
-        val code = p.waitFor(); if (code != 0) throw NativeError("Install failed (Code $code): ${p.err()}")
+        requireShizuku()
+        val owner = if (root) " -i ${ctx.packageName}" + if (lock && Build.VERSION.SDK_INT >= 34) " --update-ownership" else "" else ""
+        fun attempt(flags: String) = sh("pm install -r --restrict-permissions$flags -S ${f.length()}").let { p ->
+            p.outputStream.use { o -> f.inputStream().use { it.copyTo(o) } }
+            p.waitFor() to p.err()
+        }
+        var (code, err) = attempt(owner)
+        // Some ROMs ship a pm without --update-ownership: install anyway rather than fail the update
+        if (code != 0 && "update-ownership" in err) attempt(owner.replace(" --update-ownership", "")).let { code = it.first; err = it.second }
+        if (code != 0) throw NativeError("Install failed (Code $code): $err")
+    }
+
+    /** Root: reinstalls an app's own APKs with Orion as installer. Same signature and version, so data stays; Orion then owns its updates. */
+    suspend fun adopt(pkg: String) = withContext(Dispatchers.IO) {
+        val dir = File(pm.getApplicationInfo(pkg, 0).sourceDir).parent ?: throw NativeError("No APK path")
+        val p = sh("pm install -r -i ${ctx.packageName} \"$dir\"/*.apk")
+        val code = p.waitFor(); if (code != 0) throw NativeError("Adopt failed (Code $code): ${p.err()}")
+    }
+
+    /** Root or Shizuku: user apps Orion did not install, as package to installer label. */
+    @Suppress("DEPRECATION")
+    fun foreignInstalls(pkgs: Collection<String>): Map<String, String> = pkgs.mapNotNull { p ->
+        runCatching {
+            if (isSys(pm.getApplicationInfo(p, 0))) return@runCatching null
+            val by = if (Build.VERSION.SDK_INT >= 30) pm.getInstallSourceInfo(p).installingPackageName else pm.getInstallerPackageName(p)
+            if (by == ctx.packageName) null else p to (by?.let { runCatching { pm.getApplicationLabel(pm.getApplicationInfo(it, 0)).toString() }.getOrDefault(it) } ?: "Sideloaded")
+        }.getOrNull()
+    }.toMap()
+
+    /** Frees cache across every app at once: Android trims until the requested space is free. */
+    suspend fun trimCaches() = withContext(Dispatchers.IO) {
+        requireShizuku(); val p = sh("pm trim-caches 1024G"); if (p.waitFor() != 0) throw NativeError("Trim failed: ${p.err()}")
     }
 
     // Sentinel
@@ -233,7 +272,7 @@ class AppTracker(private val ctx: Context) {
             val name = pm.getApplicationLabel(ai).toString().replace(Regex("[^a-zA-Z0-9]"), "_") + "_" + pi.versionName + ".apk"
             val pub = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             val dest = File(pub, name)
-            if (shizukuReady() && runCatching { sh("cp \"${ai.sourceDir}\" \"${dest.absolutePath}\"").waitFor() == 0 }.getOrDefault(false)) return@withContext dest.absolutePath
+            if (elevatedReady() && runCatching { sh("cp \"${ai.sourceDir}\" \"${dest.absolutePath}\"").waitFor() == 0 }.getOrDefault(false)) return@withContext dest.absolutePath
             // Note: falls back to app-private Downloads when public storage is not writable (scoped storage), path stays readable for hashing
             val out = runCatching { File(ai.sourceDir).copyTo(dest, true) }.getOrElse { File(ai.sourceDir).copyTo(File(Downloads.dir(), name), true) }
             out.absolutePath

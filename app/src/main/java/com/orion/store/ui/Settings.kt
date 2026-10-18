@@ -21,6 +21,9 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.AnimationVector2D
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -33,6 +36,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
+import androidx.core.net.toUri
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -92,7 +104,8 @@ fun identityExport(s: Settings, favorites: List<String>, now: Long): String {
         put("isOled", s.isOled); put("hiddenTabs", json.encodeToJsonElement(s.hiddenTabs)); put("disableAnimations", s.disableAnimations)
         put("compactMode", s.compactMode); put("bottomNavScale", jsNum(s.bottomNavScale)); put("highRefreshRate", s.highRefreshRate)
         put("pullToRefreshCharacter", s.pullToRefreshCharacter); put("hapticEnabled", s.hapticEnabled); put("glassEffect", s.glassEffect)
-        put("autoUpdateEnabled", s.autoUpdateEnabled); put("wifiOnly", s.wifiOnly); put("deleteApk", s.deleteApk); put("useShizuku", s.useShizuku)
+        put("quickTiles", s.quickTiles?.let { json.encodeToJsonElement(it) } ?: JsonNull); put("settingsOrder", json.encodeToJsonElement(s.settingsOrder))
+        put("autoUpdateEnabled", s.autoUpdateEnabled); put("wifiOnly", s.wifiOnly); put("stableOnly", s.stableOnly); put("deleteApk", s.deleteApk); put("useShizuku", s.useShizuku)
         put("installerPreference", s.installerPreference); put("installerPackage", s.installerPackage); put("installerLabel", s.installerLabel)
         put("useRemoteJson", s.useRemoteJson); put("loadLocalData", s.loadLocalData); put("appStreams", json.encodeToJsonElement(s.appStreams))
         put("ignoredUpdates", json.encodeToJsonElement(s.ignoredUpdates)); put("userProfile", s.userProfile?.let { json.encodeToJsonElement(it) } ?: JsonNull)
@@ -118,9 +131,12 @@ fun identityImport(raw: String, c: Settings): Pair<Settings, List<String>?> {
         sig = (pkg["sig"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() } ?: throw IllegalStateException("Invalid Save File")
     } catch (_: Exception) { throw IdentityError("Corrupt or incompatible save file.") }
     if (sha256Hex((d.toString() + ID_SALT).toByteArray()) != sig) throw IdentityError("Tampering Detected. Save integrity check failed.")
-    return try {
-        mergeIdentity(d, c) to (d["favorites"] as? JsonArray)?.let { d.or<List<String>?>("favorites", null) }
-    } catch (_: Exception) { throw IdentityError("Corrupt or incompatible save file.") }
+    val merged = try { mergeIdentity(d, c) } catch (_: Exception) { throw IdentityError("Corrupt or incompatible save file.") }
+    // The signing salt ships in the APK, so a valid signature alone doesn't prove the numbers are real
+    if (!Xp.plausible(merged, System.currentTimeMillis())) throw IdentityError("This save has more progress than anyone could have earned. It was not restored.")
+    // Tier badges follow the level: drop the claimed ones and the level watcher grants back whatever the restored XP really earns
+    val fair = merged.copy(unlockedBadges = merged.unlockedBadges.filter { b -> TIER_BADGES.none { it.second == b } })
+    return fair to (d["favorites"] as? JsonArray)?.let { d.or<List<String>?>("favorites", null) }
 }
 
 /** The identity fields, read leniently one by one: shared by backup import and the web carry-over fallback. */
@@ -136,7 +152,8 @@ fun mergeIdentity(d: JsonObject, c: Settings): Settings =
         bottomNavScale = d.or("bottomNavScale", c.bottomNavScale).takeIf { it.isFinite() } ?: c.bottomNavScale,
         highRefreshRate = d.or("highRefreshRate", c.highRefreshRate), pullToRefreshCharacter = d.or("pullToRefreshCharacter", c.pullToRefreshCharacter),
         hapticEnabled = d.or("hapticEnabled", c.hapticEnabled), glassEffect = d.or("glassEffect", c.glassEffect),
-        autoUpdateEnabled = d.or("autoUpdateEnabled", c.autoUpdateEnabled), wifiOnly = d.or("wifiOnly", c.wifiOnly), deleteApk = d.or("deleteApk", c.deleteApk),
+        quickTiles = d.or("quickTiles", c.quickTiles), settingsOrder = d.or("settingsOrder", c.settingsOrder),
+        autoUpdateEnabled = d.or("autoUpdateEnabled", c.autoUpdateEnabled), wifiOnly = d.or("wifiOnly", c.wifiOnly), stableOnly = d.or("stableOnly", c.stableOnly), deleteApk = d.or("deleteApk", c.deleteApk),
         useShizuku = d.or("useShizuku", c.useShizuku), installerPreference = d.or("installerPreference", c.installerPreference),
         installerPackage = d.or("installerPackage", c.installerPackage), installerLabel = d.or("installerLabel", c.installerLabel),
         useRemoteJson = d.or("useRemoteJson", c.useRemoteJson), loadLocalData = d.or("loadLocalData", c.loadLocalData),
@@ -320,7 +337,7 @@ fun SettingsScreen(vm: MainViewModel) {
                 when (m) {
                     "identity" -> {
                         Section("Your data stays here") {
-                            InfoCard("Save your progress. Your identity stays on this device only.", "Orion is serverless", Sym.CloudOff)
+                            InfoCard("Save your progress to a file, or let Orion keep a copy in a cloud you pick. Nothing goes to an Orion server.", "Orion is serverless", Sym.CloudOff)
                         }
                         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button({
@@ -355,10 +372,23 @@ fun SettingsScreen(vm: MainViewModel) {
                                 Text(importStatus.first, fontWeight = FontWeight.Bold, color = c)
                             }
                         }
+                        CloudBackup(vm, s)
                     }
                     "network" -> Section("Downloads") {
                         Toggle(Sym.Wifi, "Wi-Fi only", "Skip downloads on cellular data", s.wifiOnly) { vm.set { it.copy(wifiOnly = !it.wifiOnly) } }
-                        Toggle(Sym.Autorenew, "Auto-update apps", "Refresh apps in the background", s.autoUpdateEnabled) { vm.set { it.copy(autoUpdateEnabled = !it.autoUpdateEnabled) } }
+                        Toggle(Sym.Autorenew, "Auto-update apps", "Check and download updates every few hours, even with Orion closed", s.autoUpdateEnabled) { vm.set { it.copy(autoUpdateEnabled = !it.autoUpdateEnabled) } }
+                        if (s.autoUpdateEnabled) {
+                            Toggle(Sym.SystemUpdate, "Install automatically", "Install downloaded updates over the current app. Anything that fails shows up next time you open Orion.", s.autoInstall) {
+                                vm.set { it.copy(autoInstall = !it.autoInstall) }
+                            }
+                            if (s.autoInstall) InfoCard(when {
+                                s.rootMode -> "Root mode is on: every update installs silently."
+                                s.useShizuku -> "Silent installs run through Shizuku, as long as Shizuku is running."
+                                android.os.Build.VERSION.SDK_INT >= 31 -> "Apps Orion installed update silently. Apps from other stores need one tap, or adopt them with Root mode."
+                                else -> "This Android version asks before every install. Root or Shizuku make updates silent."
+                            })
+                        }
+                        Toggle(Sym.Verified, "Stable releases only", "Skip Beta, Alpha and Nightly builds when a stable one exists", s.stableOnly) { vm.set { it.copy(stableOnly = !it.stableOnly) } }
                     }
                     "installer" -> {
                         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -384,7 +414,7 @@ fun SettingsScreen(vm: MainViewModel) {
                             Toggle(Sym.Bolt, "Silent install", "Install apps in the background", s.useShizuku) {
                                 shizukuError = null
                                 if (!vm.s.useShizuku) scope.launch {
-                                    try { vm.tracker.requestShizuku(); vm.set { it.copy(useShizuku = !it.useShizuku) } }
+                                    try { vm.tracker.requestElevated(); vm.set { it.copy(useShizuku = !it.useShizuku) } }
                                     catch (e: Exception) { shizukuError = if ((e.message ?: "").contains("Shizuku is NOT running")) "Shizuku service is not running." else "Permission was denied by user." }
                                 } else vm.set { it.copy(useShizuku = !it.useShizuku) }
                             }
@@ -392,6 +422,21 @@ fun SettingsScreen(vm: MainViewModel) {
                                 color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold) }
                             InfoCard("Silent installs require Shizuku to be installed and running.") {
                                 TextButton({ vm.navigateFromSettings("shizuku") }, contentPadding = PaddingValues(0.dp)) { Text("Get Shizuku") }
+                            }
+                        }
+                        Section("Root") {
+                            var adopt by remember { mutableStateOf<String?>(null) }
+                            ConfirmDialog(adopt, "Adopt", onConfirm = vm::adoptApps, onDismiss = { adopt = null })
+                            Toggle(Sym.Terminal, "Root mode", "Silent installs and every Guardian tool through su, no Shizuku or wireless debugging", s.rootMode) {
+                                if (vm.s.rootMode) vm.set { it.copy(rootMode = false) }
+                                else scope.launch { if (vm.tracker.requestRoot()) { vm.set { it.copy(rootMode = true) }; vm.haptic(H.SUCCESS) } else vm.error("Root access was denied or this device is not rooted.") }
+                            }
+                            if (s.rootMode) {
+                                if (android.os.Build.VERSION.SDK_INT >= 34) Toggle(Sym.Lock, "Update lock", "Other stores must ask you before updating apps Orion installs", s.updateLock) { vm.set { it.copy(updateLock = !it.updateLock) } }
+                                SRow(Sym.Sync, "Adopt installed apps", "Make Orion the updater of catalog apps you got elsewhere. Keeps their data.", onClick = {
+                                    adopt = "Orion reinstalls the same APK of each catalog app you installed from another source and becomes its installer. App data stays. The other store stops updating them."
+                                }) { Chevron() }
+                                SRow(Sym.DeleteSweep, "Clear every app's cache", "Free space across all apps in one tap", onClick = vm::trimCaches) { Chevron() }
                             }
                         }
                         Section("Recovery") {
@@ -411,7 +456,7 @@ fun SettingsScreen(vm: MainViewModel) {
                     }
                     "queue" -> {
                         StatHero("${active + ready + pending}", "in the queue · $active active · $ready ready · $pending updates") {
-                            if ((s.useShizuku || s.directInstall) && ready > 1) Button(vm::batchInstall, shapes = ButtonDefaults.shapes()) { Icon(Sym.Bolt, null); Spacer(Modifier.width(8.dp)); Text("Update all ($ready)") }
+                            if ((s.useShizuku || s.directInstall || s.rootMode) && ready > 1) Button(vm::batchInstall, shapes = ButtonDefaults.shapes()) { Icon(Sym.Bolt, null); Spacer(Modifier.width(8.dp)); Text("Update all ($ready)") }
                         }
                         if (active == 0 && vm.updates.isEmpty() && ready == 0) EmptyState(Sym.DownloadDone, "Queue is empty", "Downloads and updates show up here.")
                         else Section("Queue") {
@@ -562,53 +607,190 @@ private fun PageFooter(cat: Cat) {
 private fun Hub(vm: MainViewModel, s: Settings, d: DataState, active: Int, ready: Int, pending: Int, shared: @Composable (Cat) -> Modifier) {
     val cs = MaterialTheme.colorScheme
     fun cat(id: String) = CATS.first { it.id == id }
-    Column(Modifier.fillMaxSize().background(cs.surface).verticalScroll(rememberScrollState()).windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 32.dp)) {
+    Column(Modifier.fillMaxSize().background(cs.surface).verticalScroll(rememberScrollState()).readableWidth().windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 32.dp)) {
         Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp)) {
             Text("Settings", style = MaterialTheme.typography.displaySmallEmphasized)
             Text("Orion Store v$STORE_VERSION · ${vm.allApps().size} apps in catalog", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
         }
-        Text("Quick toggles", Modifier.padding(start = 24.dp, top = 24.dp, bottom = 10.dp), style = MaterialTheme.typography.titleSmallEmphasized, color = cs.primary)
-        val quick = listOfNotNull(
-            Triple(Sym.Autorenew, "Auto-update", s.autoUpdateEnabled) to { vm.set { it.copy(autoUpdateEnabled = !it.autoUpdateEnabled) } },
-            Triple(Sym.Wifi, "Wi-Fi only", s.wifiOnly) to { vm.set { it.copy(wifiOnly = !it.wifiOnly) } },
-            Triple(Sym.Vibration, "Haptics", s.hapticEnabled) to { vm.set { it.copy(hapticEnabled = !it.hapticEnabled) } },
-            if (android.os.Build.VERSION.SDK_INT >= 31) Triple(Sym.Wallpaper, "Material You", s.materialYouEnabled) to { vm.set { it.copy(materialYouEnabled = !it.materialYouEnabled) } } else null,
-            Triple(Sym.Speed, "Smooth motion", s.highRefreshRate) to { vm.set { it.copy(highRefreshRate = !it.highRefreshRate) } },
-            Triple(Sym.Compress, "Compact", s.compactMode) to { vm.set { it.copy(compactMode = !it.compactMode) } },
-        )
-        quick.chunked(2).forEachIndexed { r, row ->
+        var editing by remember { mutableStateOf(false) }
+        HubHeader("Quick toggles") { IconButton({ editing = true }) { Icon(Sym.Edit, "Edit quick toggles", tint = cs.primary) } }
+        val quick = (s.quickTiles ?: DEFAULT_QUICK).mapNotNull { id -> QUICK.firstOrNull { it.id == id && it.shown(s) } }
+        if (quick.isEmpty()) Text("No quick toggles. Tap the pencil to add your favorites.", Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+        quick.chunked(2).forEach { row ->
             Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { (spec, flip) -> QuickTile(spec.first, spec.second, spec.third, Modifier.weight(1f)) { vm.haptic(H.SELECTION); flip() } }
+                row.forEach { q -> QuickTile(q.icon, q.label, q.get(s), Modifier.weight(1f)) { vm.haptic(H.SELECTION); vm.set(q.flip) } }
                 if (row.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        Text("Everything else", Modifier.padding(start = 24.dp, top = 24.dp, bottom = 10.dp), style = MaterialTheme.typography.titleSmallEmphasized, color = cs.primary)
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val queued = active + ready + pending
-            Bento(vm, cat("queue"), shared, Modifier.fillMaxWidth().height(156.dp), badge = queued.takeIf { it > 0 }?.toString()) {
-                Text(if (queued == 0) "All caught up" else "$active active · $ready ready · $pending updates", style = MaterialTheme.typography.labelLarge, color = LocalContentColor.current.copy(.8f))
-                val prog = d.activeDownloads.keys.mapNotNull { d.downloadProgress[it] }.takeIf { it.isNotEmpty() }?.average()?.toFloat()
-                if (prog != null) LinearWavyProgressIndicator({ prog / 100f }, Modifier.fillMaxWidth().padding(top = 8.dp), color = LocalContentColor.current)
+        if (editing) QuickTilesSheet(vm, s) { editing = false }
+
+        // Long-press a card and drag: cards trade places live as you pass over them, the displaced one gliding to its new spot.
+        // Slots keep their sizes, so the bento never breaks. The gesture belongs to the slot where it started (keyed by slot index),
+        // so trading places mid-drag never cancels it.
+        fun orderOf(st: Settings) = (st.settingsOrder + HUB_ORDER).distinct().filter { it in HUB_ORDER }
+        var live by remember { mutableStateOf<List<String>?>(null) }
+        val order = live ?: orderOf(s)
+        var dragging by remember { mutableStateOf<String?>(null) }; var pos by remember { mutableStateOf(Offset.Zero) }
+        val slots = remember { mutableMapOf<Int, Rect>() }
+        val glide = remember { mutableStateMapOf<String, Animatable<Offset, AnimationVector2D>>() }
+        val motion = rememberCoroutineScope(); val spring = MaterialTheme.motionScheme.defaultSpatialSpec<Offset>()
+        fun center(i: Int) = slots[i]?.center ?: Offset.Zero
+        fun slide(id: String, from: Offset) = motion.launch { Animatable(from, Offset.VectorConverter).also { glide[id] = it }.animateTo(Offset.Zero, spring) }
+        fun start(slot: Int) { val o = live ?: orderOf(vm.s); live = o; dragging = o[slot]; pos = center(slot); vm.haptic(H.HEAVY) }
+        fun move(delta: Offset) {
+            val id = dragging ?: return; val o = live ?: return; pos += delta
+            val cur = o.indexOf(id); val to = slots.entries.firstOrNull { it.key != cur && it.value.contains(pos) }?.key ?: return
+            val other = o[to]
+            live = o.toMutableList().also { it[cur] = other; it[to] = id }
+            slide(other, center(to) - center(cur)); vm.haptic(H.SELECTION)
+        }
+        fun end() {
+            val id = dragging; val o = live
+            if (id != null && o != null) {
+                slide(id, pos - center(o.indexOf(id)))
+                if (o != orderOf(vm.s)) { vm.set { it.copy(settingsOrder = o) }; vm.haptic(H.SUCCESS) }
             }
-            Row(Modifier.height(268.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Bento(vm, cat("visuals"), shared, Modifier.weight(1f).fillMaxHeight()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
-                        listOf(cs.primary, cs.secondary, cs.tertiary).forEach { Box(Modifier.size(28.dp).clip(CircleShape).background(cs.surface).padding(2.dp).clip(CircleShape).background(it)) }
+            dragging = null
+        }
+        // The saved order lands a frame after the drop: keep showing the live one until it does, so nothing flickers back
+        LaunchedEffect(s.settingsOrder) { if (dragging == null) live = null }
+        fun Modifier.movable(slot: Int, id: String) = onGloballyPositioned { slots[slot] = it.boundsInRoot() }
+            .zIndex(if (dragging == id) 1f else 0f)
+            .graphicsLayer {
+                val t = if (dragging == id) pos - center(slot) else glide[id]?.value ?: Offset.Zero
+                translationX = t.x; translationY = t.y; val k = if (dragging == id) 1.05f else 1f; scaleX = k; scaleY = k
+            }
+            .pointerInput(slot) { detectDragGesturesAfterLongPress({ start(slot) }, ::end, ::end) { c, delta -> c.consume(); move(delta) } }
+        fun z(vararg ids: Int) = if (ids.any { order[it] == dragging || glide[order[it]]?.isRunning == true }) 1f else 0f
+        val queued = active + ready + pending
+        @Composable fun Slot(i: Int, modifier: Modifier, compact: Boolean = false) {
+            val c = cat(order[i])
+            val badge = when (c.id) { "queue" -> queued.takeIf { it > 0 }; "storage" -> d.pendingCleanup.size.takeIf { it > 0 }; else -> null }?.toString()
+            Bento(vm, c, shared, modifier.movable(i, c.id), compact, badge) {
+                if (!compact) when (c.id) {
+                    "queue" -> {
+                        Text(if (queued == 0) "All caught up" else "$active active · $ready ready · $pending updates", style = MaterialTheme.typography.labelLarge, color = LocalContentColor.current.copy(.8f))
+                        val prog = d.activeDownloads.keys.mapNotNull { d.downloadProgress[it] }.takeIf { it.isNotEmpty() }?.average()?.toFloat()
+                        if (prog != null) LinearWavyProgressIndicator({ prog / 100f }, Modifier.fillMaxWidth().padding(top = 8.dp), color = LocalContentColor.current)
                     }
-                    Text(fontLabel(s) + " · " + s.theme.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelLarge, color = LocalContentColor.current.copy(.8f), modifier = Modifier.padding(top = 8.dp))
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Bento(vm, cat("network"), shared, Modifier.fillMaxWidth().weight(1f), compact = true)
-                    Bento(vm, cat("storage"), shared, Modifier.fillMaxWidth().weight(1f), compact = true, badge = d.pendingCleanup.size.takeIf { it > 0 }?.toString())
+                    "visuals" -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
+                            listOf(cs.primary, cs.secondary, cs.tertiary).forEach { Box(Modifier.size(28.dp).clip(CircleShape).background(cs.surface).padding(2.dp).clip(CircleShape).background(it)) }
+                        }
+                        Text(fontLabel(s) + " · " + s.theme.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelLarge, color = LocalContentColor.current.copy(.8f), modifier = Modifier.padding(top = 8.dp))
+                    }
                 }
             }
-            Bento(vm, cat("installer"), shared, Modifier.fillMaxWidth().height(140.dp))
-            Row(Modifier.height(132.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Bento(vm, cat("identity"), shared, Modifier.weight(1f).fillMaxHeight(), compact = true)
-                Bento(vm, cat("interface"), shared, Modifier.weight(1f).fillMaxHeight(), compact = true)
+        }
+        HubHeader("Everything else", "Long-press a card to move it") {
+            if (s.settingsOrder.isNotEmpty()) TextButton({ vm.set { it.copy(settingsOrder = emptyList()) }; vm.haptic(H.MEDIUM) }) { Text("Reset") }
+        }
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Slot(0, Modifier.zIndex(z(0)).fillMaxWidth().height(156.dp))
+            Row(Modifier.zIndex(z(1, 2, 3)).height(268.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Slot(1, Modifier.weight(1f).fillMaxHeight())
+                Column(Modifier.zIndex(z(2, 3)).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Slot(2, Modifier.fillMaxWidth().weight(1f), compact = true)
+                    Slot(3, Modifier.fillMaxWidth().weight(1f), compact = true)
+                }
+            }
+            Slot(4, Modifier.zIndex(z(4)).fillMaxWidth().height(140.dp))
+            Row(Modifier.zIndex(z(5, 6)).height(132.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Slot(5, Modifier.weight(1f).fillMaxHeight(), compact = true)
+                Slot(6, Modifier.weight(1f).fillMaxHeight(), compact = true)
             }
             if (s.isDevUnlocked) Bento(vm, cat("developer"), shared, Modifier.fillMaxWidth().height(108.dp))
         }
+    }
+}
+
+/** Hub section header with an optional trailing action. */
+@Composable
+private fun HubHeader(title: String, hint: String? = null, action: @Composable () -> Unit) =
+    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 16.dp, bottom = 2.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmallEmphasized, color = MaterialTheme.colorScheme.primary)
+            hint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        action()
+    }
+
+/** Bento slots, top to bottom, in their default order. Developer stays pinned last. */
+private val HUB_ORDER = listOf("queue", "visuals", "network", "storage", "installer", "identity", "interface")
+
+/** Every setting a quick tile can flip. Ones that need a grant first (Shizuku, root, wireless pairing) stay on their pages. */
+private class Quick(val id: String, val icon: ImageVector, val label: String, val get: (Settings) -> Boolean, val shown: (Settings) -> Boolean = { true }, val flip: (Settings) -> Settings)
+private val QUICK = listOf(
+    Quick("autoUpdate", Sym.Autorenew, "Auto-update", { it.autoUpdateEnabled }) { it.copy(autoUpdateEnabled = !it.autoUpdateEnabled) },
+    Quick("wifiOnly", Sym.Wifi, "Wi-Fi only", { it.wifiOnly }) { it.copy(wifiOnly = !it.wifiOnly) },
+    Quick("haptics", Sym.Vibration, "Haptics", { it.hapticEnabled }) { it.copy(hapticEnabled = !it.hapticEnabled) },
+    Quick("materialYou", Sym.Wallpaper, "Material You", { it.materialYouEnabled }, { android.os.Build.VERSION.SDK_INT >= 31 }) { it.copy(materialYouEnabled = !it.materialYouEnabled) },
+    Quick("smooth", Sym.Speed, "Smooth motion", { it.highRefreshRate }) { it.copy(highRefreshRate = !it.highRefreshRate) },
+    Quick("compact", Sym.Compress, "Compact", { it.compactMode }) { it.copy(compactMode = !it.compactMode) },
+    Quick("stableOnly", Sym.Verified, "Stable only", { it.stableOnly }) { it.copy(stableOnly = !it.stableOnly) },
+    Quick("cleanup", Sym.CleaningServices, "Auto-cleanup", { it.deleteApk }) { it.copy(deleteApk = !it.deleteApk) },
+    Quick("noMotion", Sym.MotionPhotosOff, "No animations", { it.disableAnimations }) { it.copy(disableAnimations = !it.disableAnimations) },
+    Quick("glass", Sym.BlurOn, "Glass dock", { it.glassEffect }) { it.copy(glassEffect = !it.glassEffect) },
+    Quick("updateLock", Sym.Lock, "Update lock", { it.updateLock }, { it.rootMode && android.os.Build.VERSION.SDK_INT >= 34 }) { it.copy(updateLock = !it.updateLock) },
+    Quick("localData", Sym.Storage, "Built-in data", { it.loadLocalData }, { it.isDevUnlocked }) { it.copy(loadLocalData = !it.loadLocalData) },
+    Quick("maintenance", Sym.Construction, "Maintenance", { it.localMaintenanceMode }, { it.isDevUnlocked }) { it.copy(localMaintenanceMode = !it.localMaintenanceMode) },
+)
+private val DEFAULT_QUICK = listOf("autoUpdate", "wifiOnly", "haptics", "materialYou", "smooth", "compact")
+
+/** Your tiles on top: hold and drag to reorder (they trade places live), tap to remove. Everything else below: tap to add. */
+@Composable
+private fun QuickTilesSheet(vm: MainViewModel, s: Settings, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
+    val cs = MaterialTheme.colorScheme
+    fun pickedOf(st: Settings) = (st.quickTiles ?: DEFAULT_QUICK).filter { id -> QUICK.any { it.id == id && it.shown(st) } }
+    val picked = pickedOf(s)
+    var live by remember { mutableStateOf<List<String>?>(null) }; var dragging by remember { mutableStateOf<String?>(null) }
+    var dy by remember { mutableFloatStateOf(0f) }; var step by remember { mutableFloatStateOf(1f) }
+    val glide = remember { mutableStateMapOf<String, Animatable<Float, AnimationVector1D>>() }
+    val motion = rememberCoroutineScope(); val spring = MaterialTheme.motionScheme.defaultSpatialSpec<Float>(); val gap = with(LocalDensity.current) { ListItemDefaults.SegmentedGap.toPx() }
+    fun slide(id: String, from: Float) = motion.launch { Animatable(from).also { glide[id] = it }.animateTo(0f, spring) }
+    fun move(d: Float) {
+        val id = dragging ?: return; val o = live ?: return; dy += d
+        val i = o.indexOf(id); val j = when { dy > step / 2 && i < o.lastIndex -> i + 1; dy < -step / 2 && i > 0 -> i - 1; else -> return }
+        val other = o[j]
+        live = o.toMutableList().also { it[i] = other; it[j] = id }; dy -= (j - i) * step; slide(other, (j - i) * step); vm.haptic(H.SELECTION)
+    }
+    fun end() {
+        dragging?.let { slide(it, dy) }; dragging = null; dy = 0f
+        live?.takeIf { it != pickedOf(vm.s) }?.let { o -> vm.set { it.copy(quickTiles = o) }; vm.haptic(H.SUCCESS) }
+    }
+    LaunchedEffect(picked) { if (dragging == null) live = null }
+    val tiles = live ?: picked
+    fun toggle(id: String) { vm.haptic(H.SELECTION); vm.set { st -> pickedOf(st).let { cur -> st.copy(quickTiles = if (id in cur) cur - id else cur + id) } } }
+    SheetTitle("Quick toggles", Sym.Edit, "Hold and drag to reorder. Tap to add or remove.")
+    Column(Modifier.weight(1f, false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+        if (tiles.isNotEmpty()) Text("Your tiles", Modifier.padding(start = 8.dp, bottom = 4.dp), style = MaterialTheme.typography.titleSmallEmphasized, color = cs.primary)
+        tiles.forEachIndexed { i, id -> key(id) {
+            val q = QUICK.first { it.id == id }
+            SegmentedListItem({ toggle(id) }, ListItemDefaults.segmentedShapes(i, tiles.size),
+                modifier = Modifier.onSizeChanged { step = it.height + gap }.zIndex(if (dragging == id) 1f else 0f)
+                    .graphicsLayer { translationY = if (dragging == id) dy else glide[id]?.value ?: 0f; val k = if (dragging == id) 1.03f else 1f; scaleX = k; scaleY = k }
+                    .pointerInput(Unit) {
+                        detectDragGesturesAfterLongPress({ live = live ?: pickedOf(vm.s); dragging = id; dy = 0f; vm.haptic(H.HEAVY) }, ::end, ::end) { c, d -> c.consume(); move(d.y) }
+                    },
+                colors = ListItemDefaults.segmentedColors(containerColor = if (dragging == id) cs.primaryContainer else cs.secondaryContainer),
+                leadingContent = { Icon(q.icon, null) }, trailingContent = { Icon(Sym.DragHandle, "Hold to move") }) {
+                Text(q.label, fontWeight = FontWeight.SemiBold)
+            }
+        } }
+        val rest = QUICK.filter { it.shown(s) && it.id !in tiles }
+        if (rest.isNotEmpty()) Text("Add tiles", Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp), style = MaterialTheme.typography.titleSmallEmphasized, color = cs.primary)
+        rest.forEachIndexed { i, q ->
+            SegmentedListItem({ toggle(q.id) }, ListItemDefaults.segmentedShapes(i, rest.size), colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainerHigh),
+                leadingContent = { Icon(q.icon, null) }, trailingContent = { Icon(Sym.Add, "Add") }) {
+                Text(q.label, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton({ vm.set { it.copy(quickTiles = null) }; vm.haptic(H.MEDIUM) }, modifier = Modifier.weight(1f), enabled = s.quickTiles != null, shapes = ButtonDefaults.shapes()) {
+            Icon(Sym.RestartAlt, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Reset")
+        }
+        Button(LocalSheetClose.current, modifier = Modifier.weight(1f), shapes = ButtonDefaults.shapes()) { Icon(Sym.Check, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Done") }
     }
 }
 
@@ -640,7 +822,7 @@ private fun Page(cat: Cat, modifier: Modifier, onBack: () -> Unit, content: @Com
     CompositionLocalProvider(LocalAccent provides cat.color) {
         val screen = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
         // At least a screen tall, so the footer settles at the bottom of short pages (weight works once the scroll column has a min height).
-        Column(modifier.fillMaxSize().background(cs.surface).verticalScroll(rememberScrollState()).heightIn(min = screen).padding(bottom = 40.dp)) {
+        Column(modifier.fillMaxSize().background(cs.surface).verticalScroll(rememberScrollState()).readableWidth().heightIn(min = screen).padding(bottom = 40.dp)) {
             Box(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(bg, cs.surface)))) {
                 Spinner(cat.shape, fg.copy(.08f), 260.dp, Modifier.align(Alignment.TopEnd).offset(70.dp, (-30).dp), periodMs = 40_000)
                 Column(Modifier.windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 12.dp)) {
@@ -656,6 +838,32 @@ private fun Page(cat: Cat, modifier: Modifier, onBack: () -> Unit, content: @Com
             Spacer(Modifier.weight(1f))
             PageFooter(cat)
         }
+    }
+}
+
+/** Auto backup through Android's storage picker: Drive, OneDrive, Proton Drive or any app with a document provider, with no account linking inside Orion. */
+@Composable
+private fun CloudBackup(vm: MainViewModel, s: Settings) = Section("Cloud backup") {
+    val ctx = LocalContext.current; val scope = rememberCoroutineScope(); val pm = ctx.packageManager
+    val uri = s.cloudBackupUri.takeIf { it.isNotEmpty() }?.toUri()
+    val where = remember(uri) { uri?.authority?.let { a -> runCatching { pm.resolveContentProvider(a, 0)?.loadLabel(pm)?.toString() }.getOrNull() ?: a } }
+    val rw = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+    fun connect() = scope.launch {
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, "orion_identity.osf")
+        val u = ResultHost.run(i).let { (code, data) -> data?.data?.takeIf { code == android.app.Activity.RESULT_OK } } ?: return@launch
+        if (runCatching { ctx.contentResolver.takePersistableUriPermission(u, rw) }.isFailure) { vm.error("That storage app does not allow automatic backups. Pick another."); return@launch }
+        vm.set { it.copy(cloudBackupUri = u.toString(), cloudBackupEvery = it.cloudBackupEvery.takeIf { e -> e != "off" } ?: "week") }; vm.cloudBackup(true)
+    }
+    SRow(Sym.Cloud, if (uri == null) "Connect a cloud" else "Backing up to $where", if (uri == null) "Google Drive, OneDrive, Proton Drive or any storage app" else "Tap to pick another file", onClick = ::connect) { Chevron() }
+    if (uri != null) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("off" to "Off", "day" to "Daily", "week" to "Weekly", "month" to "Monthly").forEach { (id, label) -> Choice(s.cloudBackupEvery == id, label) { vm.set { it.copy(cloudBackupEvery = id) } } }
+        }
+        val last = if (s.lastCloudBackup == 0L) "Never backed up" else "Last backup " + android.text.format.DateUtils.getRelativeTimeSpanString(s.lastCloudBackup)
+        SRow(Sym.FileUpload, "Back up now", last, onClick = { vm.cloudBackup(true) }) { Chevron() }
+        SRow(Sym.CloudOff, "Disconnect", "Stop backing up. The file in your cloud stays.", onClick = {
+            runCatching { ctx.contentResolver.releasePersistableUriPermission(uri, rw) }; vm.set { it.copy(cloudBackupUri = "", cloudBackupEvery = "off") }
+        })
     }
 }
 

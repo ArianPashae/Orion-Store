@@ -176,85 +176,66 @@ fun FaqSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
     }
 }
 
-// ---------------- Release notes ----------------
+// ---------------- What's new (GitHub Releases) ----------------
 
-data class ReleaseNote(val version: String, val date: String, val title: String, val items: List<Pair<String, String>>)
-
-private val NOTE_LABELS = setOf("NEW", "FIX", "IMP", "TWEAK", "HOT", "SEC")
-private fun note(v: String, d: String, t: String, vararg i: Pair<String, String>) = ReleaseNote(v, d, t, i.toList())
-private val DEFAULT_NOTES = listOf(
-    note("v2.0.5", "Current", "Hotfix: Unavailable Apps",
-        "FIX" to "Fixed apps incorrectly showing as Currently unavailable due to a mirror key mismatch for GitHub repositories.",
-        "FIX" to "Fixed the entire catalog going blank when the mirror download fails. The app now keeps your working data instead of overwriting it.",
-        "IMP" to "Added fallback matching for app repositories to make download detection more reliable."),
-    note("v2.0.0", "Previous", "Orion-RE: Native at Last",
-        "NEW" to "Rebuilt from the web app into a fully native Jetpack Compose app with Material 3 Expressive.", "NEW" to "Skip the 24-hour wait with built-in wireless install, no Shizuku needed.",
-        "NEW" to "Fuel the Code Chapter 2 · The Forkening, with three new bosses and badges.", "NEW" to "Real XP levels with Bronze, Silver and Gold pilot cards you can flip and sign.",
-        "IMP" to "Your profile, badges and settings carry over from the web version automatically."),
-    note("v1.5.5", "Previous", "Material You & Icon Precision",
-        "NEW" to "Native Material You dynamic theming powered by Android 12+ wallpaper Monet palette.", "NEW" to "Material You toggle in Settings with OLED pure black preservation.",
-        "FIX" to "Corrected monochrome adaptive icon scaling to exact 1:1 proportions with original logo.", "IMP" to "Native dynamic color extraction plugin with real-time dark and light adaptation."),
-    note("v1.5.0", "Previous", "Personalization & Visual Polish",
-        "NEW" to "All-new My Apps hub for downloaded, installed, and updateable apps.", "NEW" to "Redesigned clean, minimal font picker with real-time live preview.",
-        "FIX" to "Resolved dynamic font changing across native Android APK and web builds.", "FIX" to "Fixed layout clipping and responsive controls across all screen sizes.",
-        "NEW" to "Android 13+ Material You themed monochrome adaptive icon."),
-    note("v1.2.3", "Previous", "The \"Ignore\" Update",
-        "NEW" to "Added option to ignore app updates for 1 week, until next version, or never.", "NEW" to "Added option to close Developer Options after unlocking.", "IMP" to "Bumped store version to v1.2.3."),
-    note("v1.2.2", "Feb 2026", "The Patch Notes Update",
-        "NEW" to "Release Notes Viewer: You can now check what's new directly from the Dev tab.", "FIX" to "Optimized internal memory usage for smoother scrolling.", "TWEAK" to "Improved touch target size for navigation buttons."),
-    note("v1.2.1", "Previous", "Stability Patch",
-        "FIX" to "Resolved duplicate download entries in queue.", "FIX" to "Fixed crash when resuming app from background.", "IMP" to "Added \"Retry\" button for failed downloads."),
-)
-
-/** Remote format: `items: [{label,text}]`, or the simplified `changes: ["NEW: text"]`. */
-fun parseNotes(raw: String): List<ReleaseNote> = json.parseToJsonElement(raw).jsonArray.map { e ->
-    val o = e.jsonObject
-    fun str(o: JsonObject, k: String) = (o[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
-    val items = (o["items"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let { x -> (str(x, "label") ?: "NOTE") to (str(x, "text") ?: "") } }.orEmpty().ifEmpty {
-        (o["changes"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.map { l ->
-            val lab = l.substringBefore(':', "").trim().uppercase()
-            if (lab in NOTE_LABELS) lab to l.substringAfter(':').trim() else "NOTE" to l
-        }.orEmpty()
-    }
-    ReleaseNote(str(o, "version") ?: "Unknown", str(o, "date") ?: "", str(o, "title") ?: "Update", items)
-}
-
-private fun labelColor(l: String) = when (l) { "NEW" -> Green; "FIX" -> Orange; "HOT" -> Red; "SEC" -> Purple; "IMP", "TWEAK" -> Blue; else -> Gray }
-
+/** What's new reads GitHub Releases directly: publishing a release is the only step, no JSON to maintain. Cached for offline and rate limits. */
 @Composable
 fun ReleaseNotesSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
     val ctx = LocalContext.current
-    var notes by remember { mutableStateOf(DEFAULT_NOTES) }; var loading by remember { mutableStateOf(true) }
+    var releases by remember { mutableStateOf<List<Release>?>(null) }; var failed by remember { mutableStateOf(false) }
+    var open by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
-        val f = File(ctx.filesDir, "orion_release_notes_cache.json")
-        withContext(Dispatchers.IO) { runCatching { parseNotes(f.readText()) }.getOrNull() }?.let { notes = it; loading = false }
-        runCatching {
-            val raw = Net.text("${Defaults.RELEASE_NOTES_URL}?t=${System.currentTimeMillis()}", noStore = true)
-            notes = parseNotes(raw); withContext(Dispatchers.IO) { f.writeText(raw) }
-        }
-        loading = false
+        val f = File(ctx.filesDir, "releases.json")
+        withContext(Dispatchers.IO) { runCatching { parseReleases(f.readText()) }.getOrNull() }?.let { releases = it }
+        // GitHub allows 60 unauthenticated calls an hour per network, so a fresh cache is used as-is
+        if (releases == null || System.currentTimeMillis() - f.lastModified() > 30 * 60_000L) runCatching {
+            val raw = Net.text(Defaults.RELEASES_API, mapOf("Accept" to "application/vnd.github+json"))
+            releases = parseReleases(raw); withContext(Dispatchers.IO) { f.writeText(raw) }
+        }.onFailure { if (releases == null) failed = true }
     }
-    SheetTitle("Patch Notes", Sym.NewReleases, "What's Changing")
-    LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (loading) items(2) { Skeleton(Modifier.fillMaxWidth().height(168.dp)) }
-        else itemsIndexed(notes) { i, n ->
-            val latest = i == 0
-            Surface(shape = RoundedCornerShape(20.dp), color = if (latest) cs.primaryContainer else cs.surfaceContainerHigh) {
-                Column(Modifier.fillMaxWidth().padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(n.version, Modifier.weight(1f), style = ty.titleLargeEmphasized, color = if (latest) cs.primary else LocalContentColor.current)
-                        if (n.date.isNotEmpty()) Tag(n.date, if (latest) cs.primary else cs.onSurfaceVariant)
-                    }
-                    Text(n.title, style = ty.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(12.dp))
-                    n.items.forEach { (l, t) ->
-                        Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
-                            Box(Modifier.widthIn(min = 60.dp)) { Tag(l, labelColor(l)) }
-                            Spacer(Modifier.width(8.dp))
-                            Text(t, Modifier.weight(1f), style = ty.bodyMedium)
+    SheetTitle("What's new", Sym.NewReleases, "Straight from Orion's releases")
+    val list = releases
+    LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        when {
+            list == null && !failed -> items(2) { Skeleton(Modifier.fillMaxWidth().height(140.dp)) }
+            list.isNullOrEmpty() -> item {
+                EmptyState(Sym.CloudOff, "Can't reach GitHub", "Release notes load once you're online.")
+                TextButton({ vm.tracker.open("https://github.com/RookieEnough/Orion-Store/releases") }, Modifier.fillMaxWidth()) { Text("Open releases on GitHub") }
+            }
+            else -> itemsIndexed(list, key = { _, r -> r.version }) { i, r ->
+                ReleaseCard(vm, r, latest = i == 0, expanded = (open ?: list[0].version) == r.version) { open = if ((open ?: list[0].version) == r.version) "" else r.version }
+            }
+        }
+    }
+}
+
+/** Collapsed: version, title, when. Open: section titles with one-line headlines, and a link to the full notes. */
+@Composable
+private fun ReleaseCard(vm: MainViewModel, r: Release, latest: Boolean, expanded: Boolean, toggle: () -> Unit) {
+    val installed = isSameVersion(r.version, STORE_VERSION)
+    val fg = if (latest) cs.onPrimaryContainer else cs.onSurface
+    Surface(toggle, shape = RoundedCornerShape(if (expanded) 28.dp else 20.dp), color = if (latest) cs.primaryContainer else cs.surfaceContainerHigh, contentColor = fg) {
+        Column(Modifier.fillMaxWidth().animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()).padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("v${r.version}", Modifier.weight(1f), style = ty.titleLargeEmphasized)
+                if (installed) Tag("Installed", if (latest) cs.primary else Safe) else if (latest) Tag("Latest", cs.primary)
+            }
+            if (r.name.isNotEmpty()) Text(r.name, style = ty.titleMedium, fontWeight = FontWeight.SemiBold)
+            val count = r.sections.sumOf { it.items.size }
+            val whenText = if (r.publishedAt > 0) android.text.format.DateUtils.getRelativeTimeSpanString(r.publishedAt).toString() else ""
+            Text(listOf(whenText, if (count > 0) "$count changes" else "").filter { it.isNotEmpty() }.joinToString(" · "), style = ty.labelMedium, color = fg.copy(.7f))
+            if (expanded) {
+                r.sections.forEach { sec ->
+                    if (sec.title.isNotEmpty()) Text(sec.title, Modifier.padding(top = 16.dp, bottom = 4.dp), style = ty.titleSmallEmphasized, color = cs.primary)
+                    sec.items.forEach { line ->
+                        Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
+                            Box(Modifier.padding(top = 8.dp).size(6.dp).clip(CircleShape).background(fg.copy(.5f)))
+                            Spacer(Modifier.width(10.dp))
+                            Text(line, style = ty.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
+                if (r.url.isNotEmpty()) TextButton({ vm.tracker.open(r.url) }, Modifier.padding(top = 8.dp)) { Text("Full notes on GitHub"); Spacer(Modifier.width(6.dp)); Icon(Sym.OpenInNew, null, Modifier.size(16.dp)) }
             }
         }
     }
@@ -319,7 +300,7 @@ private fun ModernUiSheet(vm: MainViewModel, onDismiss: () -> Unit) {
     var enable by remember { mutableStateOf(false) }; var settings by remember { mutableStateOf(false) }
     OrionSheet({
         vm.set { it.copy(hasSeenModernUITutorial = true, storeLayout = if (enable) "modern" else it.storeLayout) }
-        onDismiss(); if (settings) vm.openSettings(); vm.armTutorial()
+        onDismiss(); if (settings) vm.openSettings()
     }) {
         val close = LocalSheetClose.current
         val now = { enable = true; vm.haptic(H.SUCCESS); close() }
@@ -417,7 +398,7 @@ fun BundlePreviewSheet(vm: MainViewModel, b: BundleItem, onDismiss: () -> Unit) 
             }
             if (apps.isEmpty()) item { EmptyState(Sym.Inventory2, "Bundle is empty", "Add apps with the button above.") }
             itemsIndexed(apps, key = { _, a -> a.id }) { i, a ->
-                BundleRow(vm, a, colShape(i, apps.size), a.id in extras, !s.installedVersions[a.id].isNullOrEmpty(), a.id == first, onOpen = { close(); vm.selectApp(a) }) {
+                BundleRow(vm, a, colShape(i, apps.size), a.id in extras, !s.installedVersions[a.id].isNullOrEmpty(), a.id == first, onOpen = { vm.selectApp(a) }) {
                     vm.set { st ->
                         var x = st
                         if (a.id in extras) x = x.removeAppFromBundleExtras(b.id, a.id)

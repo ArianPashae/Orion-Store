@@ -14,6 +14,8 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -189,7 +191,6 @@ fun Header(vm: MainViewModel) {
         AnimatedVisibility(vm.storeUpdateAvailable) {
             FilledTonalIconButton({ vm.fBypassed = false; vm.loadApps(true) }, shapes = IconButtonDefaults.shapes()) { Icon(Sym.SystemUpdate, "Store update") }
         }
-        if (vm.tab == Tab.ABOUT) IconButton({ vm.open(Overlay.RELEASE_NOTES) }) { Icon(Sym.NewReleases, "Release notes") }
         val dl = d.activeDownloads.size; val up = vm.updates.size
         IconButton({ vm.openSettings() }) {
             BadgedBox({
@@ -255,7 +256,9 @@ private fun AnnouncementButton(vm: MainViewModel) {
     val cs = MaterialTheme.colorScheme
     val unread = !vm.announcementDismissed()
     val tip = rememberTooltipState(isPersistent = true)
-    LaunchedEffect(vm.startupReady, unread) { if (vm.startupReady && unread && !vm.announcementShown) { vm.announcementShown = true; delay(700); tip.show() } }
+    // The popup queue decides when the announcement drops; closing it hands the turn to the next popup
+    LaunchedEffect(vm.announceNow) { if (vm.announceNow) { tip.show(); vm.announceNow = false } }
+    DisposableEffect(Unit) { onDispose { vm.announceNow = false } }
     LaunchedEffect(vm.selectedApp, vm.overlays.size, vm.tab) { if (vm.selectedApp != null || vm.overlays.isNotEmpty()) tip.dismiss() }
     TooltipBox(
         TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Below, 8.dp),
@@ -306,12 +309,35 @@ private fun Overlays(vm: MainViewModel) {
     if (o(Overlay.FAQ)) FaqSheet(vm) { vm.close(Overlay.FAQ) }
     if (o(Overlay.SUBMISSION)) SubmissionSheet(vm) { vm.close(Overlay.SUBMISSION) }
     if (o(Overlay.AD_DONATION)) AdDonationSheet(vm) { vm.close(Overlay.AD_DONATION) }
-    if (vm.startupReady && !LocalS.current.seenNativeWelcome) WelcomeSheet(vm)
+    if (vm.welcomeOpen) WelcomeSheet(vm)
     if (o(Overlay.CUSTOM_BUNDLE)) CustomBundleSheet(vm) { vm.close(Overlay.CUSTOM_BUNDLE) }
     if (o(Overlay.PROFILE_STATS)) ProfileStatsSheet(vm) { vm.close(Overlay.PROFILE_STATS) }
     if (o(Overlay.NOTICE)) NoticeSheet(vm) { vm.dismissNotice() }
     if (o(Overlay.TUTORIAL)) TutorialSheet(vm) { vm.close(Overlay.TUTORIAL) }
-    vm.selectedBundle?.let { BundlePreviewSheet(vm, it) { vm.selectedBundle = null } }
+    // The bundle stays selected while one of its apps is open, so backing out of the detail page lands on the bundle again.
+    vm.selectedBundle?.takeIf { vm.selectedApp == null }?.let { BundlePreviewSheet(vm, it) { vm.selectedBundle = null } }
     vm.vtTarget?.let { VirusTotalSheet(vm, it) { vm.vtTarget = null } }
     if (vm.changeRequest) vm.selectedApp?.let { ChangeRequestSheet(vm, it) { vm.changeRequest = false } }
+    vm.autoReport?.let { log -> AutoReportDialog(vm, log) }
+}
+
+/** Shown on the first start after a background pass that hit a problem. Failed updates stay ready to install with one tap. */
+@Composable
+private fun AutoReportDialog(vm: MainViewModel, log: List<AutoResult>) {
+    val failed = log.filter { !it.ok }; val ok = log.filter { it.ok }
+    AlertDialog(vm::dismissAutoReport, icon = { Icon(Sym.SystemUpdate, null) },
+        title = { Text(if (failed.size == 1) "1 update needs you" else "${failed.size} updates need you") },
+        text = {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (ok.isNotEmpty()) Text("Updated in the background: ${ok.joinToString { it.name }}.", style = MaterialTheme.typography.bodyMedium)
+                failed.forEach { r ->
+                    Column {
+                        Text("${r.name} ${r.version}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text(r.error ?: "Install failed.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton({ vm.dismissAutoReport(); vm.openSettings("queue") }) { Text("Open queue") } },
+        dismissButton = { TextButton(vm::dismissAutoReport) { Text("Later") } })
 }

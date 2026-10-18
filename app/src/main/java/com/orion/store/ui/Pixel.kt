@@ -1,5 +1,6 @@
 package com.orion.store.ui
 
+import android.graphics.Bitmap
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -14,13 +15,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.graphics.shapes.RoundedPolygon
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.shape.CircleShape
@@ -50,14 +55,25 @@ val PTR = listOf(
 fun ptr(id: String) = PTR.firstOrNull { it.id == id } ?: PTR[0]
 fun PtrCharacter.brush() = Brush.linearGradient(listOf(Color(tint.first), Color(tint.second)))
 
+/** Each face is baked once into a 1px-per-cell bitmap: the picker shows eleven faces, and a drawRect per cell made its first frame stutter. */
+private val faces = HashMap<String, ImageBitmap>()
+
+private fun bake(c: PtrCharacter, grid: String, closed: Boolean): ImageBitmap {
+    val base = PIXEL_GRIDS[grid].orEmpty()
+    val rows = c.closed?.takeIf { closed && it.first < base.size }?.let { (i, r) -> base.toMutableList().also { it[i] = r } } ?: base
+    val bmp = Bitmap.createBitmap(rows.maxOfOrNull { it.length }?.coerceAtLeast(1) ?: 1, rows.size.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+    rows.forEachIndexed { y, r -> r.forEachIndexed { x, ch -> c.palette[ch]?.let { bmp.setPixel(x, y, it.toInt()) } } }
+    return bmp.asImageBitmap()
+}
+
 @Composable
 fun PixelFace(c: PtrCharacter, size: Dp, frame: Int = 0, modifier: Modifier = Modifier, closed: Boolean = false) {
-    val base = PIXEL_GRIDS[c.frames[frame % c.frames.size]].orEmpty()
-    val rows = c.closed?.takeIf { closed && it.first < base.size }?.let { (i, r) -> base.toMutableList().also { it[i] = r } } ?: base
+    val grid = c.frames[frame % c.frames.size]
+    val img = faces.getOrPut("${c.id}/$grid/$closed") { bake(c, grid, closed) }
     Canvas(modifier.size(size)) {
-        val n = maxOf(rows.size, rows.maxOfOrNull { it.length } ?: 1); val px = this.size.minDimension / n
-        val ox = (this.size.width - (rows.maxOfOrNull { it.length } ?: 0) * px) / 2; val oy = (this.size.height - rows.size * px) / 2
-        rows.forEachIndexed { y, r -> r.forEachIndexed { x, ch -> c.palette[ch]?.let { drawRect(Color(it), Offset(ox + x * px, oy + y * px), Size(px + .5f, px + .5f)) } } }
+        val px = this.size.minDimension / maxOf(img.width, img.height); val w = img.width * px; val h = img.height * px
+        drawImage(img, dstOffset = IntOffset(((this.size.width - w) / 2).roundToInt(), ((this.size.height - h) / 2).roundToInt()),
+            dstSize = IntSize(w.roundToInt(), h.roundToInt()), filterQuality = FilterQuality.None)
     }
 }
 

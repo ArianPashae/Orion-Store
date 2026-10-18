@@ -522,7 +522,8 @@ fun LeaderboardSubmitSheet(vm: MainViewModel, onDismiss: () -> Unit) {
         err = ""; val n = name.trim()
         err = when {
             n.isEmpty() -> "Please enter a cool name!"; n.length > 15 -> "Name too long (Max 15 chars)"; n.length < 3 -> "Name too short (Min 3 chars)"
-            isProfane(n, blocklist) -> "Let's keep it family friendly!"; !canSubmit && !sim -> "You need 5 contributions to join the Hall of Fame!"; else -> ""
+            isProfane(n, blocklist) -> "Let's keep it family friendly!"; !canSubmit && !sim -> "You need 5 contributions to join the Hall of Fame!"
+            !sim && !Xp.plausible(s, System.currentTimeMillis()) -> "Your progress failed the integrity check, so it can't join the leaderboard."; else -> ""
         }
         if (err.isNotEmpty()) return
         status = "processing"; scope.launch { delay(2500); if (sim) status = "success" else network() }

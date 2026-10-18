@@ -178,7 +178,7 @@ fun GuardianSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
 
     fun revoke(pkg: String, perm: String) = ask("Revoke ${cleanPermName(perm)}? App might crash.") {
         processing = pkg
-        try { tracker.requestShizuku(); tracker.revokePermission(pkg, perm); vm.haptic(H.SUCCESS); toast.show("Permission Revoked"); dCache = null; delay(500); fetchApps() }
+        try { tracker.requestElevated(); tracker.revokePermission(pkg, perm); vm.haptic(H.SUCCESS); toast.show("Permission Revoked"); dCache = null; delay(500); fetchApps() }
         catch (e: Exception) { toast.show(e.message ?: "Revoke Failed", true) } finally { processing = null }
     }
 
@@ -198,13 +198,13 @@ fun GuardianSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
     }
 
     val cs = MaterialTheme.colorScheme; val ty = MaterialTheme.typography
-    var shizuku by remember { mutableStateOf(tracker.shizukuReady()) }
-    LaunchedEffect(Unit) { while (true) { delay(2000); shizuku = tracker.shizukuReady() } }
+    var shizuku by remember { mutableStateOf(tracker.elevatedReady()) }
+    LaunchedEffect(Unit) { while (true) { delay(2000); shizuku = tracker.elevatedReady() } }
     data class Mode(val id: String, val label: String, val icon: ImageVector, val blurb: String, val shape: RoundedPolygon)
     val modes = listOf(
         Mode("permissions", "Perms", Sym.Security, "Spot and revoke risky permissions", MaterialShapes.Cookie9Sided),
         Mode("surgeon", "Surgeon", Sym.MedicalServices, "Pull the APK out of any app", MaterialShapes.Clover4Leaf),
-        Mode("debloater", "Debloat", Sym.DeleteSweep, "Remove system apps, no root", MaterialShapes.SoftBurst),
+        Mode("debloater", "Debloat", Sym.DeleteSweep, "Remove system apps, reversibly", MaterialShapes.SoftBurst),
     )
     val mi = modes.indexOfFirst { it.id == tab }.coerceAtLeast(0); val mode = modes[mi]
 
@@ -220,7 +220,7 @@ fun GuardianSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
         Surface(shape = Pill, color = if (shizuku) cs.tertiaryContainer else cs.errorContainer, contentColor = if (shizuku) cs.onTertiaryContainer else cs.onErrorContainer) {
             Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(LocalContentColor.current)); Spacer(Modifier.width(6.dp))
-                Text(if (shizuku) "Shizuku on" else "Shizuku off", style = ty.labelMedium)
+                Text(if (tracker.root) "Root" else if (shizuku) "Shizuku on" else "Shizuku off", style = ty.labelMedium)
             }
         }
     }
@@ -275,7 +275,7 @@ fun GuardianSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
                 Text("Uninstalling system apps can brick your device. I am not responsible for bootloops or data loss.", textAlign = TextAlign.Center,
                     style = ty.bodyLarge, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp).widthIn(max = 420.dp))
                 val h = ButtonDefaults.MediumContainerHeight
-                Button({ scope.launch { try { tracker.requestShizuku(); shizuku = true; accepted = true } catch (_: Exception) { toast.show("Shizuku Permission Denied", true) } } },
+                Button({ scope.launch { try { tracker.requestElevated(); shizuku = true; accepted = true } catch (_: Exception) { toast.show("Shizuku Permission Denied", true) } } },
                     modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp).heightIn(min = h), shapes = ButtonDefaults.shapesFor(h), contentPadding = ButtonDefaults.contentPaddingFor(h),
                     colors = ButtonDefaults.buttonColors(cs.error, cs.onError)) {
                     Icon(Sym.GppMaybe, null, Modifier.size(ButtonDefaults.iconSizeFor(h))); Spacer(Modifier.width(ButtonDefaults.iconSpacingFor(h)))

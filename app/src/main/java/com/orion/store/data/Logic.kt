@@ -1,5 +1,10 @@
 package com.orion.store.data
 
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import java.net.URI
 import java.net.URLEncoder
 import java.security.MessageDigest
@@ -46,14 +51,14 @@ fun isUpdateIgnored(app: AppItem, s: Settings, now: Long): Boolean {
     return when (ig.type) {
         "never" -> true
         "week" -> ig.timestamp != null && now - ig.timestamp < ONE_WEEK_MS
-        "version" -> ig.version == preferredVersion(app, s.appStreams[app.id] ?: "Stable")
+        "version" -> ig.version == preferredVersion(app, s.streamOf(app.id))
         else -> false
     }
 }
 
 fun availableUpdates(apps: List<AppItem>, s: Settings, now: Long) = apps.filter { a ->
     val inst = s.installedVersions[a.id]
-    !inst.isNullOrEmpty() && hasAvailableUpdate(a, inst, s.appStreams[a.id] ?: "Stable") && !isUpdateIgnored(a, s, now)
+    !inst.isNullOrEmpty() && hasAvailableUpdate(a, inst, s.streamOf(a.id)) && !isUpdateIgnored(a, s, now)
 }
 // endregion
 
@@ -420,6 +425,8 @@ fun injectAfterHero(cols: List<StoreCollection>, inj: StoreCollection?): List<St
 
 // region downloads & ownership
 fun sanitizeFileVersionToken(v: String?) = (v?.ifEmpty { null } ?: "latest").replace(Regex("[^a-zA-Z0-9._-]"), "_")
+/** One name per app version: the store and the background updater find each other's downloads by it. */
+fun apkFileName(app: AppItem, version: String) = "${app.name.replace(Regex("[^a-zA-Z0-9]"), "_")}_${sanitizeFileVersionToken(version.ifEmpty { app.latestVersion })}.apk"
 
 fun downloadVersionMeta(app: AppItem, url: String?, stream: String = "Stable"): Pair<String, String> {
     if (url != null) app.availableVersions.firstOrNull { v -> v.variants.any { it.url == url } }?.let { return it.version to it.type }
@@ -450,8 +457,8 @@ fun resolveOwnedAppId(group: List<AppItem>, pkgKey: String, installed: String, s
     val owner = s.packageOwners[pkgKey]?.takeIf { it in ids }
     if (owner != null && isSameVersion(s.lastRemoteVersions[owner], installed)) return owner
     group.filter { isSameVersion(s.lastRemoteVersions[it.id], installed) }.singleOrNull()?.let { return it.id }
-    group.filter { isSameVersion(preferredVersion(it, s.appStreams[it.id] ?: "Stable"), installed) }.singleOrNull()?.let { return it.id }
-    if (owner != null && group.none { isComparableVersion(s.lastRemoteVersions[it.id]) || isComparableVersion(preferredVersion(it, s.appStreams[it.id] ?: "Stable")) }) return owner
+    group.filter { isSameVersion(preferredVersion(it, s.streamOf(it.id)), installed) }.singleOrNull()?.let { return it.id }
+    if (owner != null && group.none { isComparableVersion(s.lastRemoteVersions[it.id]) || isComparableVersion(preferredVersion(it, s.streamOf(it.id))) }) return owner
     return null
 }
 // endregion
@@ -511,11 +518,61 @@ object Xp {
     const val AD = 40; const val SUBMISSION = 100; const val APP = 10
     /** [apps] is the library size: each app counts once, so re-downloading the same APK cannot farm XP. */
     fun total(s: Settings, apps: Int) = s.adWatchCount * AD.toLong() + s.submissionCount * SUBMISSION.toLong() + apps * APP.toLong() + s.gameXP
-    /** XP from level n to n + 1: 60, 70, 80... Bronze (10) takes 900 XP, Silver (30) 5,800, Gold (50) 14,700. */
-    fun step(n: Int) = 50L + 10 * n
+    /** XP from level n to n + 1 grows quadratically: 61, 74, 89... 250 at 10, 1,250 at 30. Bronze (10) takes 1,185 XP, Silver (30) 14,355, Gold (50) 55,125. */
+    fun step(n: Int) = 50L + 10L * n + n.toLong() * n
+
+    // Anti-farming limits. Fuel the Code pays out at most AD_DAILY times a day, AD_GAP_MS apart; the mini game at most GAME_DAILY XP a day.
+    const val DAY_MS = 86_400_000L; const val AD_DAILY = 20; const val AD_GAP_MS = 30_000L; const val GAME_DAILY = 300L
+    private const val SUBMISSION_DAILY = 5
+    /** 2026-01-01, before Fuel the Code shipped: no honest pilot can be ahead of a perfect daily grind since then. */
+    private const val EPOCH = 1_767_225_600_000L
+    /** False when progress is impossible to have earned honestly, e.g. a hand-edited backup. Checked on import and before leaderboard submits. */
+    fun plausible(s: Settings, now: Long): Boolean {
+        val days = maxOf(1L, (now - EPOCH) / DAY_MS + 1)
+        return s.adWatchCount in 0..AD_DAILY * days && s.gameXP in 0..GAME_DAILY * days && s.submissionCount in 0..SUBMISSION_DAILY * days && s.changeRequestCount in 0..s.submissionCount
+    }
     fun start(level: Int) = (1 until level).sumOf { step(it) }
     fun level(xp: Long): Int { var l = 1; var left = xp; while (left >= step(l)) { left -= step(l); l++ }; return l }
     fun title(level: Int) = when { level >= 50 -> "Gold pilot"; level >= 30 -> "Silver pilot"; level >= 10 -> "Bronze pilot"; else -> "Cadet" }
 }
 /** Pilot card tiers and the badge each one awards. */
 val TIER_BADGES = listOf(10 to "Bronze Wings", 30 to "Silver Wings", 50 to "Gold Wings")
+
+// region release notes, straight from GitHub Releases
+/** One release boiled down for the What's new sheet: its section titles and one short headline per bullet. */
+data class Release(val version: String, val name: String, val publishedAt: Long, val url: String, val sections: List<ReleaseSection>)
+data class ReleaseSection(val title: String, val items: List<String>)
+
+private val BOLD_LEAD = Regex("""^\*\*(.+?)\*\*""")
+private val MD_LINK = Regex("""\[([^\]]+)]\([^)]*\)""")
+
+/** Markdown body → headlines. A bullet's bold lead is its headline; without one, its first sentence, trimmed to fit a line or two. */
+fun releaseHighlights(body: String): List<ReleaseSection> {
+    val out = mutableListOf<ReleaseSection>(); var title = ""; var items = mutableListOf<String>()
+    fun flush() { if (items.isNotEmpty()) out += ReleaseSection(title, items); items = mutableListOf() }
+    body.lineSequence().map { it.trim() }.forEach { l ->
+        when {
+            l.startsWith("#") -> { flush(); title = l.trimStart('#').trim().replace("**", "") }
+            l.startsWith("- ") || l.startsWith("* ") -> {
+                val t = l.drop(2).trim()
+                val head = BOLD_LEAD.find(t)?.groupValues?.get(1) ?: t.substringBefore(". ")
+                val line = head.replace(MD_LINK, "$1").replace("**", "").replace("`", "").trim().trimEnd(':', '.')
+                if (line.isNotEmpty()) items += if (line.length <= 90) line else line.take(88).substringBeforeLast(' ') + "…"
+            }
+        }
+    }
+    flush(); return out
+}
+
+/** GitHub's `/releases` JSON, newest first, drafts skipped. */
+fun parseReleases(raw: String): List<Release> {
+    val time = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+    return json.parseToJsonElement(raw).jsonArray.mapNotNull { e ->
+        val o = e.jsonObject; fun str(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        if ((o["draft"] as? JsonPrimitive)?.booleanOrNull == true) return@mapNotNull null
+        // Release names read like "Orion-RE : The Labyrinth Update"; the part after the colon is the title
+        val name = str("name").substringAfter(':').trim().ifEmpty { str("name") }
+        Release(str("tag_name").removePrefix("v"), name, runCatching { time.parse(str("published_at"))!!.time }.getOrDefault(0), str("html_url"), releaseHighlights(str("body")))
+    }
+}
+// endregion

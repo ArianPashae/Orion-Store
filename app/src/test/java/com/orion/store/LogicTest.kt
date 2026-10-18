@@ -83,9 +83,40 @@ class LogicTest {
         assertEquals(Settings(), webSettingsImport("not json", Settings()))
     }
 
+    @Test fun releaseNotes() {
+        val body = "# Orion Store 2.1.5\r\n\r\nIntro text.\r\n\r\n> **Updating?** Install over it.\r\n\r\n## 🔄 Hands-Free Updates\r\n\r\n" +
+            "* **Updates That Install Themselves:** Turn on **Auto-update apps** in Settings.\r\n* **Safe by Design:** Checks every download.\r\n\r\n---\r\n\r\n" +
+            "### Fixes\r\n- Fixed apps showing as unavailable. Your list is kept.\r\n- See [the docs](https://x.y) for `more`.\r\n## Empty section\r\n"
+        val s = releaseHighlights(body)
+        assertEquals(listOf("🔄 Hands-Free Updates", "Fixes"), s.map { it.title })
+        assertEquals(listOf("Updates That Install Themselves", "Safe by Design"), s[0].items)
+        assertEquals(listOf("Fixed apps showing as unavailable", "See the docs for more"), s[1].items)
+        assertTrue(releaseHighlights("- " + "word ".repeat(40)).single().items.single().let { it.length <= 90 && it.endsWith("…") })
+        val r = parseReleases("""[{"tag_name":"v2.0.5","name":"Orion-RE : The Labyrinth Update","published_at":"2026-10-14T06:47:22Z","html_url":"u","body":"- Fix"},{"draft":true,"tag_name":"x"}]""")
+        assertEquals(1, r.size); assertEquals("2.0.5", r[0].version); assertEquals("The Labyrinth Update", r[0].name); assertEquals(1_791_960_442_000L, r[0].publishedAt)
+    }
+
+    @Test fun antiFarming() {
+        val t = 1_790_000_000_000L
+        // Ads: 30 s apart at least, AD_DAILY per rolling day, then nothing until the oldest falls out of the window
+        var s = Settings()
+        s = s.incrementAdWatch(t); assertEquals(1, s.adWatchCount)
+        s = s.incrementAdWatch(t + 1_000); assertEquals(1, s.adWatchCount)
+        repeat(30) { s = s.incrementAdWatch(t + (it + 1) * Xp.AD_GAP_MS) }
+        assertEquals(Xp.AD_DAILY, s.adWatchCount); assertNotNull(s.adBlockReason(t + 40 * Xp.AD_GAP_MS))
+        assertNull(s.adBlockReason(t + Xp.DAY_MS + 1)); assertEquals(Xp.AD_DAILY + 1, s.incrementAdWatch(t + Xp.DAY_MS + 1).adWatchCount)
+        // Game XP: 50 per run, GAME_DAILY per day, resets the next day
+        var g = Settings(); repeat(20) { g = g.addGameXP(1e9, t) }
+        assertEquals(Xp.GAME_DAILY, g.gameXP); assertEquals(Xp.GAME_DAILY + 50, g.addGameXP(80.0, t + Xp.DAY_MS).gameXP)
+        // Imports and leaderboard: a hand-edited save fails, real progress passes
+        assertTrue(Xp.plausible(Settings(adWatchCount = 300, gameXP = 2_000, submissionCount = 12), t))
+        assertFalse(Xp.plausible(Settings(adWatchCount = 999_999), t)); assertFalse(Xp.plausible(Settings(adWatchCount = -1), t))
+        assertFalse(Xp.plausible(Settings(submissionCount = 1, changeRequestCount = 5), t))
+    }
+
     @Test fun misc() {
-        assertEquals(1, Xp.level(0)); assertEquals(2, Xp.level(60)); assertEquals(10, Xp.level(900)); assertEquals(9, Xp.level(899))
-        assertEquals(30, Xp.level(5800)); assertEquals(50, Xp.level(14700)); assertEquals(Xp.start(50), 14700L)
+        assertEquals(1, Xp.level(60)); assertEquals(2, Xp.level(61)); assertEquals(10, Xp.level(1185)); assertEquals(9, Xp.level(1184))
+        assertEquals(30, Xp.level(14355)); assertEquals(50, Xp.level(55125)); assertEquals(Xp.start(50), 55125L)
         assertTrue(isProfane("b4d guy", listOf("bad")))
         assertFalse(isProfane("good", listOf("bad")))
         assertEquals("FINE LOCATION", cleanPermName("android.permission.ACCESS_FINE_LOCATION"))

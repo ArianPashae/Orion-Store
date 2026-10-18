@@ -72,9 +72,11 @@ private fun StreamBadge(t: String) = Tag(t.uppercase(), streamColor(t))
 @Composable
 fun DetailScreen(vm: MainViewModel, base: AppItem) {
     val s = LocalS.current; val d = LocalD.current; val scope = rememberCoroutineScope(); val cs = MaterialTheme.colorScheme
-    val app = remember(base, s.resolvedPackageNames) { base.copy(packageName = s.resolvedPackageNames[base.id] ?: base.packageName) }
+    // Stable releases only: the version picker and Download see just the stable build. Apps with no stable release keep theirs.
+    val app = remember(base, s.resolvedPackageNames, s.stableOnly) { base.copy(packageName = s.resolvedPackageNames[base.id] ?: base.packageName,
+        availableVersions = if (s.stableOnly) base.availableVersions.filter { it.type == "Stable" }.ifEmpty { base.availableVersions } else base.availableVersions) }
     val local = s.installedVersions[app.id]
-    val needsUpdate = hasAvailableUpdate(app, local, s.appStreams[app.id] ?: "Stable")
+    val needsUpdate = hasAvailableUpdate(app, local, s.streamOf(app.id))
     val installed = !local.isNullOrEmpty(); val upToDate = installed && !needsUpdate
     val activeId = d.activeDownloads[app.id]; val cleanup = d.pendingCleanup[app.id]?.fileName; val ready = d.readyToInstall[app.id]
     val status = d.downloadStatus[app.id]; val progress = d.downloadProgress[app.id] ?: 0f
@@ -222,7 +224,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
             }
         },
     ) { pad ->
-        LazyColumn(Modifier.fillMaxSize(), list, contentPadding = PaddingValues(bottom = pad.calculateBottomPadding() + 24.dp)) {
+        LazyColumn(Modifier.fillMaxSize().readableWidth(), list, contentPadding = PaddingValues(bottom = pad.calculateBottomPadding() + 24.dp)) {
             item("head") {
                 val wash by animateColorAsState(iconColor(app)?.let { tonal(it).first } ?: cs.surfaceContainer, MaterialTheme.motionScheme.slowEffectsSpec(), label = "wash")
                 // The bar only holds actions on the right now, so the head tucks up right under it.
@@ -425,7 +427,7 @@ fun IconBox(icon: ImageVector, tint: Color = MaterialTheme.colorScheme.primary) 
     Box(Modifier.size(40.dp).clip(CircleShape).background(tint.copy(.12f)), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(22.dp), tint = tint) }
 
 @Composable
-private fun Lightbox(shots: List<String>, start: Int, onClose: () -> Unit) = Dialog(onClose, DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+fun Lightbox(shots: List<String>, start: Int, onClose: () -> Unit) = Dialog(onClose, DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
     // The dialog is its own window: hide its system bars too, so screenshots open truly full screen (swipe from an edge to peek).
     val view = androidx.compose.ui.platform.LocalView.current
     DisposableEffect(view) {

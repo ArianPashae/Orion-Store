@@ -262,12 +262,18 @@ private suspend fun unityLoadAd() = suspendCancellableCoroutine { c ->
     })
 }
 
+private class AdSkipped : Exception("skipped")
+
 private suspend fun unityShow(a: Activity) = suspendCancellableCoroutine { c ->
     UnityAds.show(a, PLACEMENT, UnityAdsShowOptions(), object : IUnityAdsShowListener {
         override fun onUnityAdsShowFailure(p: String?, e: UnityAds.UnityAdsShowError?, m: String?) { if (c.isActive) c.resumeWithException(Exception(m ?: e?.name ?: "show failed")) }
         override fun onUnityAdsShowStart(p: String?) = Unit
         override fun onUnityAdsShowClick(p: String?) = Unit
-        override fun onUnityAdsShowComplete(p: String?, s: UnityAds.UnityAdsShowCompletionState?) { if (c.isActive) c.resume(Unit) }
+        // A skipped ad funds nothing, so it earns nothing
+        override fun onUnityAdsShowComplete(p: String?, s: UnityAds.UnityAdsShowCompletionState?) {
+            if (!c.isActive) return
+            if (s == UnityAds.UnityAdsShowCompletionState.COMPLETED) c.resume(Unit) else c.resumeWithException(AdSkipped())
+        }
     })
 }
 
@@ -275,7 +281,7 @@ private suspend fun unityShow(a: Activity) = suspendCancellableCoroutine { c ->
 fun AdDonationSheet(vm: MainViewModel, onDismiss: () -> Unit) {
     val s = LocalS.current; val ctx = LocalContext.current; val scope = rememberCoroutineScope()
     var view by remember { mutableStateOf("checking") }; var reason by remember { mutableStateOf("") }
-    var left by remember { mutableIntStateOf(5) }; var prog by remember { mutableFloatStateOf(0f) }; var msg by remember { mutableIntStateOf(0) }
+    var msg by remember { mutableIntStateOf(0) }
     val streak = s.adWatchCount; val result = maxOf(streak, 1)
     val card = storyCard(result); val prev = if (streak > 0) storyCard(streak) else null
     val boss = QUEST_BOSSES.any { it.lvl == result }
@@ -287,25 +293,33 @@ fun AdDonationSheet(vm: MainViewModel, onDismiss: () -> Unit) {
                 when { sec?.isVpnActive == true -> "VPN Detected"; sec?.hasProxy == true -> "Proxy/Filter Detected"; !Net.alive(AD_PROBE, 3000) -> "Ad Blocker Detected"; else -> "" }
             }
         }
-        if (reason.isNotEmpty()) view = "violation" else { launch { runCatching { unityLoad(ctx) } }; view = "intro" }
+        val limit = vm.s.adBlockReason(System.currentTimeMillis())
+        when {
+            reason.isNotEmpty() -> view = "violation"
+            limit != null -> { reason = limit; view = "noad" }
+            else -> { launch { runCatching { unityLoad(ctx) } }; view = "intro" }
+        }
     }
     LaunchedEffect(view) { if (view == "loading") { msg = 0; while (true) { delay(1200); msg = (msg + 1) % LOADING_MESSAGES.size } } }
-    // Reaching Chapter 2 in the sheet counts as being told about it, so no "new mission" notice follows
-    fun complete() { vm.set { it.incrementAdWatch().let { n -> if (questChapter(n.adWatchCount) > n.questChapterSeen) n.copy(questChapterSeen = questChapter(n.adWatchCount)) else n } }; vm.haptic(H.SUCCESS); view = "success" }
-    suspend fun mock(r: String) {
-        reason = r; view = "playing"; left = 5; prog = 0f
-        for (ms in 100..5000 step 100) { delay(100); prog = ms / 5000f; left = ceil((5000 - ms) / 1000.0).toInt() }
-        complete()
+    // Reaching Chapter 2 in the sheet counts as being told about it, so no "new mission" notice follows.
+    // Only a fully watched ad pays out, and only within the daily limits: no ad, a skipped ad or a failed load earns nothing.
+    fun complete() {
+        val before = vm.s.adWatchCount
+        vm.set { it.incrementAdWatch(System.currentTimeMillis()).let { n -> if (questChapter(n.adWatchCount) > n.questChapterSeen) n.copy(questChapterSeen = questChapter(n.adWatchCount)) else n } }
+        if (vm.s.adWatchCount > before) { vm.haptic(H.SUCCESS); view = "success" } else { reason = vm.s.adBlockReason(System.currentTimeMillis()) ?: "Try again later."; view = "noad" }
+    }
+    fun noAd(e: Exception) {
+        reason = if (e is AdSkipped) "The ad was skipped. Watch it to the end to fuel the code." else "No ad is available right now. Try again in a few minutes."
+        view = "noad"; vm.haptic(H.ERROR)
     }
     fun play() { scope.launch {
-        val a = ctx.activity() ?: return@launch mock("Connection Failed")
-        try { unityShow(a); complete() } catch (_: Exception) {
+        val a = ctx.activity() ?: return@launch noAd(Exception())
+        try { unityShow(a); complete() } catch (e: AdSkipped) { noAd(e) } catch (_: Exception) {
             view = "loading"
-            try { unityLoad(ctx); delay(6000); unityShow(a); complete() }
-            catch (e: Exception) { mock(if (e.message.orEmpty().contains("loaded", true)) "Network Busy" else "Connection Failed") }
+            try { unityLoad(ctx); delay(6000); unityShow(a); complete() } catch (e: Exception) { noAd(e) }
         }
     } }
-    OrionSheet(onDismiss, dismissible = view != "playing") {
+    OrionSheet(onDismiss) {
         val close = LocalSheetClose.current
         val fx = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
         AnimatedContent(view to streak, transitionSpec = { fadeIn(fx) togetherWith fadeOut(fx) }, label = "quest") { (v, _) ->
@@ -368,11 +382,9 @@ fun AdDonationSheet(vm: MainViewModel, onDismiss: () -> Unit) {
                         AnimatedContent(msg, label = "lm") { Text(LOADING_MESSAGES[it], style = ty.bodyLarge, color = cs.onSurfaceVariant) }
                         Text("(Connecting to Unity Network...)", style = ty.bodySmall, color = cs.onSurfaceVariant)
                     }
-                    "playing" -> {
-                        Lead("Ad Simulation", "Real ad failed. Running Sim.", center = true) { Blob(Sym.Movie, Caution, 72, MaterialShapes.Cookie6Sided) }
-                        Tag(reason.ifEmpty { "Unknown Error" }, Caution)
-                        Text("${left}s", style = ty.displayMediumEmphasized)
-                        LinearWavyProgressIndicator({ prog }, Modifier.fillMaxWidth())
+                    "noad" -> {
+                        Lead("Mission Aborted", reason, "No XP this time", Caution, center = true) { Blob(Sym.Movie, Caution, 88, MaterialShapes.Cookie6Sided) }
+                        CtaButton("Back to camp", close, tonal = true)
                     }
                     else -> {
                         var k by remember { mutableIntStateOf(0) }
@@ -530,19 +542,27 @@ private val INKS = listOf(Color(0xFF1B1B1F), Color(0xFF1D4ED8), Color(0xFFDC2626
 @Composable
 private fun SignatureSide(s: Settings, modifier: Modifier, update: ((Settings) -> Settings) -> Unit) = Column(modifier) {
     val ink = INKS[s.signatureInk.coerceIn(0, INKS.lastIndex)]
+    // Every stroke, clear and ink change is one step: undo walks back through them, redo forward again until a new step is made
+    val past = remember { mutableStateListOf<Pair<String, Int>>() }; val future = remember { mutableStateListOf<Pair<String, Int>>() }
+    fun apply(to: Pair<String, Int>) = update { it.copy(pilotSignature = to.first, signatureInk = to.second) }
+    fun step(to: Pair<String, Int>) { past += s.pilotSignature to s.signatureInk; future.clear(); apply(to) }
+    fun undo() { future += s.pilotSignature to s.signatureInk; apply(past.removeAt(past.lastIndex)) }
+    fun redo() { past += s.pilotSignature to s.signatureInk; apply(future.removeAt(future.lastIndex)) }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("PILOT SIGNATURE", Modifier.weight(1f), style = ty.labelLarge, letterSpacing = 2.sp, fontWeight = FontWeight.Black)
-        if (s.pilotSignature.isNotEmpty()) Text("Clear", Modifier.clip(Pill).clickable { update { it.copy(pilotSignature = "") } }.padding(horizontal = 10.dp, vertical = 4.dp),
+        IconButton(::undo, Modifier.size(32.dp), enabled = past.isNotEmpty()) { Icon(Sym.Undo, "Undo", Modifier.size(20.dp)) }
+        IconButton(::redo, Modifier.size(32.dp), enabled = future.isNotEmpty()) { Icon(Sym.Redo, "Redo", Modifier.size(20.dp)) }
+        if (s.pilotSignature.isNotEmpty()) Text("Clear", Modifier.clip(Pill).clickable { step("" to s.signatureInk) }.padding(horizontal = 10.dp, vertical = 4.dp),
             style = ty.labelLargeEmphasized)
     }
     SignaturePad(s.pilotSignature, ink, Modifier.padding(vertical = 10.dp).weight(1f).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFFFAFAF7))) { sig ->
-        update { it.copy(pilotSignature = sig) }
+        step(sig to s.signatureInk)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         INKS.forEachIndexed { i, c ->
             val on = i == s.signatureInk
             Box(Modifier.size(28.dp).then(if (on) Modifier.border(2.dp, LocalContentColor.current, CircleShape) else Modifier).padding(if (on) 4.dp else 0.dp)
-                .clip(CircleShape).background(c).clickable { update { it.copy(signatureInk = i) } }.semantics { contentDescription = "Ink ${i + 1}"; selected = on })
+                .clip(CircleShape).background(c).clickable { if (!on) step(s.pilotSignature to i) }.semantics { contentDescription = "Ink ${i + 1}"; selected = on })
         }
         Spacer(Modifier.weight(1f))
         Text("Tap to flip", style = ty.labelSmall, color = LocalContentColor.current.copy(.7f))
@@ -1067,9 +1087,11 @@ fun SubmissionSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDis
                     LinearWavyProgressIndicator({ p }, Modifier.weight(1f), color = if (f.shots.size >= 3) Safe else cs.primary)
                     Text("${f.shots.size}/3", Modifier.padding(start = 12.dp), style = ty.labelLargeEmphasized, color = if (f.shots.size >= 3) Safe else cs.onSurfaceVariant)
                 }
+                var viewing by remember { mutableStateOf<Int?>(null) }
+                viewing?.let { Lightbox(f.shots, it) { viewing = null } }
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     f.shots.forEachIndexed { i, u ->
-                        Box(Modifier.size(84.dp, 150.dp).clip(RoundedCornerShape(16.dp)).background(cs.surfaceContainerHighest)) {
+                        Box(Modifier.size(84.dp, 150.dp).clip(RoundedCornerShape(16.dp)).background(cs.surfaceContainerHighest).clickable(onClickLabel = "View screenshot ${i + 1}") { viewing = i }) {
                             AsyncImage(u, "Screenshot ${i + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                             Text("#${i + 1}", Modifier.align(Alignment.BottomStart).padding(6.dp).clip(Pill).background(cs.scrim.copy(.6f)).padding(horizontal = 8.dp, vertical = 2.dp), style = ty.labelSmall, color = Color.White)
                             FilledTonalIconButton({ f = f.copy(shots = f.shots.filterIndexed { j, _ -> j != i }) }, modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(32.dp)) {

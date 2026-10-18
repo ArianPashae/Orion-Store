@@ -23,6 +23,7 @@ import kotlin.math.max
 @Serializable data class IgnoredUpdate(val type: String, val timestamp: Long? = null, val version: String? = null)
 @Serializable data class UserProfile(val name: String, val avatarId: String? = null, val avatarUrl: String? = null, val createdAt: Long = 0)
 @Serializable data class CustomBundle(val id: String, val title: String, val description: String, val icon: String, val appIds: List<String>, val createdAt: Long = 0, val submittedAt: Long? = null)
+@Serializable data class AutoResult(val appId: String, val name: String, val version: String, val ok: Boolean, val error: String? = null, val at: Long)
 @Serializable data class ForcedSnapshot(val schemaVersion: Int = 1, val targetVersion: String, val downloadFileName: String, val status: String, val downloadCompleted: Boolean, val exported: Boolean)
 
 @Serializable data class Settings(
@@ -36,9 +37,26 @@ import kotlin.math.max
     val hiddenTabs: List<String> = emptyList(),
     val virusTotalApiKey: String = "",
     val autoUpdateEnabled: Boolean = false,
+    /** With auto-update on, the background job also installs what it downloads, even while Orion is closed. */
+    val autoInstall: Boolean = false,
+    /** Background update results not yet shown; the next app start reports them, then clears the list. */
+    val autoLog: List<AutoResult> = emptyList(),
+    /** Anti-farming: reward times in the last 24 hours, and today's game XP (keyed by epoch day). */
+    val adStamps: List<Long> = emptyList(), val gameXpDay: Long = 0, val gameXpToday: Long = 0,
     val wifiOnly: Boolean = false,
+    /** Beta, Alpha and Nightly builds are hidden wherever a stable release exists; overrides per-app channels while on. */
+    val stableOnly: Boolean = false,
     val deleteApk: Boolean = false,
     val useShizuku: Boolean = false,
+    /** Run every privileged action (installs, Guardian) through `su` instead of Shizuku or wireless ADB. */
+    val rootMode: Boolean = false,
+    /** Root installs ask Android 14+ to make other stores get consent before updating apps Orion installed. */
+    val updateLock: Boolean = false,
+    /** Settings hub layout: quick tile ids (null = default set) and category order (empty = default). */
+    val quickTiles: List<String>? = null,
+    val settingsOrder: List<String> = emptyList(),
+    /** Auto backup of the identity to a user-picked document (any cloud app's provider). Every = off, day, week or month. */
+    val cloudBackupUri: String = "", val cloudBackupEvery: String = "off", val lastCloudBackup: Long = 0,
     /** Install through Orion's built-in wireless ADB (shell user), skipping the 24-hour unverified-app wait. */
     val directInstall: Boolean = false,
     val installerPreference: String = "system",
@@ -97,11 +115,25 @@ import kotlin.math.max
     }
     fun withInstaller(pref: String, pkg: String = "", label: String = "") =
         copy(installerPreference = pref, installerPackage = if (pref == "package") pkg else "", installerLabel = if (pref == "package") label else "")
+    fun streamOf(id: String) = if (stableOnly) "Stable" else appStreams[id] ?: "Stable"
     fun hideInstaller(pkg: String) = if (pkg in hiddenInstallers) this else copy(hiddenInstallers = hiddenInstallers + pkg)
     fun incrementCoinFlipHint() = copy(coinFlipHintCount = minOf(3, coinFlipHintCount + 1))
     fun withPtrCharacter(c: String) = copy(pullToRefreshCharacter = if (c == "pikachu") "pokeball" else c)
     fun withDevUnlocked(v: Boolean) = copy(isDevUnlocked = v, localMaintenanceMode = if (v) localMaintenanceMode else false)
-    fun incrementAdWatch(): Settings { val n = adWatchCount + 1; return copy(adWatchCount = n, isContributor = isContributor || n >= 3, isLegend = isLegend || n >= 25) }
+    /** Null when an ad may pay out now, else the user-facing reason it can't. */
+    fun adBlockReason(now: Long): String? {
+        val recent = adStamps.filter { now - it < Xp.DAY_MS }
+        return when {
+            recent.size >= Xp.AD_DAILY -> "You've fueled the code ${Xp.AD_DAILY} times today. Come back tomorrow, pilot."
+            recent.any { now - it < Xp.AD_GAP_MS } -> "Catch your breath. The next mission opens in a few seconds."
+            else -> null
+        }
+    }
+    fun incrementAdWatch(now: Long): Settings {
+        if (adBlockReason(now) != null) return this
+        val n = adWatchCount + 1
+        return copy(adWatchCount = n, isContributor = isContributor || n >= 3, isLegend = isLegend || n >= 25, adStamps = adStamps.filter { now - it < Xp.DAY_MS } + now)
+    }
     fun registerSubmission(now: Long) = copy(submissionCount = submissionCount + 1, lastSubmissionTime = now)
     fun registerChangeRequest(now: Long) = copy(changeRequestCount = changeRequestCount + 1, submissionCount = submissionCount + 1, lastSubmissionTime = now)
     fun withSubmissionCount(c: Double) = copy(submissionCount = if (c.isFinite()) max(0.0, floor(c)).toInt() else 0)
@@ -118,9 +150,11 @@ import kotlin.math.max
     }
     fun removeAppFromBundleExtras(bundleId: String, appId: String) = copy(extraBundleApps = extraBundleApps + (bundleId to extraBundleApps[bundleId].orEmpty() - appId))
     fun resetBundle(bundleId: String) = copy(removedBundleApps = removedBundleApps - bundleId, extraBundleApps = extraBundleApps - bundleId)
-    fun addGameXP(amount: Double): Settings {
-        val safe = if (amount.isFinite()) floor(amount.coerceIn(0.0, 50.0)).toLong() else 0
-        return copy(gameXP = max(0, gameXP + safe))
+    /** Max 50 per run and [Xp.GAME_DAILY] per day, so the mini game can't be ground into the leaderboard. */
+    fun addGameXP(amount: Double, now: Long): Settings {
+        val day = now / Xp.DAY_MS; val today = if (gameXpDay == day) gameXpToday else 0
+        val safe = minOf(if (amount.isFinite()) floor(amount.coerceIn(0.0, 50.0)).toLong() else 0, Xp.GAME_DAILY - today).coerceAtLeast(0)
+        return copy(gameXP = max(0, gameXP + safe), gameXpDay = day, gameXpToday = today + safe)
     }
     fun updateDinoHighScore(score: Long) = copy(dinoHighScore = max(dinoHighScore, max(0, score)))
     fun unlockBadge(id: String) = if (id in unlockedBadges) this else copy(unlockedBadges = unlockedBadges + id)
@@ -181,13 +215,14 @@ class Persisted<T>(file: File, private val serializer: KSerializer<T>, default: 
     val value: T get() = flow.value
     fun update(fn: (T) -> T) = flow.update(fn)
 
+    /** Writes now. Background jobs call this before finishing: the process may die before the debounced write lands. */
+    fun save(state: T = value) = synchronized(atomic) {
+        val out = atomic.startWrite()
+        runCatching { out.write(json.encodeToString(serializer, state).toByteArray()); atomic.finishWrite(out) }.onFailure { atomic.failWrite(out) }
+    }
+
     init {
         @OptIn(FlowPreview::class)
-        scope.launch(Dispatchers.IO) {
-            flow.drop(1).debounce(250).collect { state ->
-                val out = atomic.startWrite()
-                runCatching { out.write(json.encodeToString(serializer, state).toByteArray()); atomic.finishWrite(out) }.onFailure { atomic.failWrite(out) }
-            }
-        }
+        scope.launch(Dispatchers.IO) { flow.drop(1).debounce(250).collect { save(it) } }
     }
 }
