@@ -36,6 +36,7 @@ mirror.json
 mirror_config.json
 notice_v1.2.3.json
 release_notes.json
+RELEASE_NOTES_*.md
 storefront_modules.example.json
 
 # Utility scripts and scratch text

@@ -395,7 +395,7 @@ class AppTracker(private val ctx: Context) {
     fun share(title: String, text: String, url: String) = ctx.startActivity(
         Intent.createChooser(Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_TEXT, "$text $url").setType("text/plain"), title).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 
-    fun launch(pkg: String) = ctx.startActivity((pm.getLaunchIntentForPackage(pkg) ?: throw NativeError("App not found")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    fun launch(pkg: String) = ctx.startActivity((pm.getLaunchIntentForPackage(pkg) ?: pm.getLeanbackLaunchIntentForPackage(pkg) ?: throw NativeError("App not found")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     fun uninstall(pkg: String) = ctx.startActivity(Intent(Intent.ACTION_DELETE, "package:$pkg".toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     fun open(url: String) = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
 

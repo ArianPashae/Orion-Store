@@ -64,6 +64,9 @@ fun StoreTab(vm: MainViewModel, platform: String, contentPadding: PaddingValues)
     val cats = vm.filterCats
     val visible = vm.visibleForTab()
     val list = vm.classicApps()
+    // Grouped once per list and sort, not on every recomposition (download progress alone recomposes this tab twice a second)
+    val sort = vm.sortControl
+    val groups = remember(list, sort) { if (sort == SortOption.NAME_ASC || sort == SortOption.NAME_DESC) list.groupBy { initial(it.name) }.toList() else listOf("" to list) }
     val modernHome = vm.modernCollections()
     val grid = rememberLazyGridState(); val scope = rememberCoroutineScope()
     // Jump to top only when the filter actually changes, not when returning to a tab whose scroll was restored.
@@ -74,7 +77,7 @@ fun StoreTab(vm: MainViewModel, platform: String, contentPadding: PaddingValues)
     Box(Modifier.fillMaxSize()) {
         PullToRefreshBox(vm.refreshing, vm::reload, Modifier.fillMaxSize(), state = ptr,
             indicator = { PtrIndicator(ptr, vm.refreshing, s.pullToRefreshCharacter, Modifier.align(Alignment.TopCenter)) }) {
-            LazyVerticalGrid(GridCells.Adaptive(if (s.compactMode) 92.dp else 100.dp), Modifier.fillMaxSize(), grid, contentPadding,
+            LazyVerticalGrid(GridCells.Adaptive(if (s.compactMode) 78.dp else 100.dp), Modifier.fillMaxSize(), grid, contentPadding,
                 horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 item("header", span = full) { Header(vm) }
                 item("filters", span = full) { Filters(vm, ts, cats, visible.size, platform, modern) }
@@ -91,7 +94,7 @@ fun StoreTab(vm: MainViewModel, platform: String, contentPadding: PaddingValues)
                         itemsIndexed(vm.expandedApps, key = { _, it -> "exp-" + it.id }) { i, it -> AppTile(vm, it, "exp", Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).reveal(i)) }
                         item("exp-more", span = full) { MoreButton("View more apps", vm::expandedMore) }
                     }
-                    else -> classicList(vm, list, vm.sortControl, view)
+                    else -> classicList(vm, groups, view)
                 }
             }
         }
@@ -115,7 +118,7 @@ fun StoreSkeleton(modern: Boolean) = Column(Modifier.fillMaxWidth().padding(top 
             }
         }
     } else repeat(7) { i ->
-        Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 2.dp).fillMaxWidth().clip(rowShape(i, 7)).background(MaterialTheme.colorScheme.surfaceContainer)
+        Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 2.dp).fillMaxWidth().clip(colShape(i, 7)).background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Skeleton(Modifier.size(56.dp)); Spacer(Modifier.width(16.dp))
             Column { Skeleton(Modifier.size(160.dp, 14.dp), Pill); Skeleton(Modifier.padding(top = 8.dp).size(100.dp, 12.dp), Pill) }
@@ -154,7 +157,8 @@ private fun Filters(vm: MainViewModel, ts: TabViewState, cats: List<String>, cou
                 Text("$count apps · " + (if (ts.query.isNotEmpty()) "“${ts.query}”" else vm.sortControl.label), style = MaterialTheme.typography.labelLarge,
                     color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (!modern) IconButton(vm::reload, enabled = !vm.refreshing) { if (vm.refreshing) LoadingIndicator(Modifier.size(24.dp)) else Icon(Sym.Refresh, "Refresh") }
+            // TV remotes cannot pull to refresh, so the button shows on modern too
+            if (!modern || Device.isTv) IconButton(vm::reload, enabled = !vm.refreshing) { if (vm.refreshing) LoadingIndicator(Modifier.size(24.dp)) else Icon(Sym.Refresh, "Refresh") }
             vm.submissionCooldown?.let { AssistChip({}, { Text(it) }, leadingIcon = { Icon(Sym.Schedule, null, Modifier.size(16.dp)) }, enabled = false) }
                 ?: TextButton({ vm.open(Overlay.SUBMISSION) }, shapes = ButtonDefaults.shapes()) {
                     Icon(Sym.AddCircleOutline, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Submit app")
@@ -216,8 +220,7 @@ fun Shot(url: String, maxW: Dp, maxH: Dp, modifier: Modifier = Modifier, portrai
 }
 
 /** Classic layout: an M3 Expressive segmented list. Name sorts split into lettered groups, each group one rounded container. */
-private fun LazyGridScope.classicList(vm: MainViewModel, list: List<AppItem>, sort: SortOption, view: String) {
-    val groups = if (sort == SortOption.NAME_ASC || sort == SortOption.NAME_DESC) list.groupBy { initial(it.name) }.toList() else listOf("" to list)
+private fun LazyGridScope.classicList(vm: MainViewModel, groups: List<Pair<String, List<AppItem>>>, view: String) {
     groups.forEach { (letter, apps) ->
         if (letter.isNotEmpty()) item("L-$letter", span = full) { LetterHeader(letter, apps.size) }
         // Keyed per view: a new category or sort arrives as a fresh list with its entrance, instead of old rows gliding across into new slots.
@@ -268,23 +271,37 @@ private fun StateBlob(app: AppItem, src: MutableInteractionSource) {
 /** List row used by every platform in the classic layout (and for search results): one segment of a grouped list. */
 @Composable
 fun AppRow(vm: MainViewModel, app: AppItem, index: Int = 0, count: Int = 1, modifier: Modifier = Modifier) {
-    val compact = LocalS.current.compactMode; val fav = app.id in LocalD.current.favorites; val cs = MaterialTheme.colorScheme
+    val s = LocalS.current; val compact = s.compactMode; val fav = app.id in LocalD.current.favorites; val cs = MaterialTheme.colorScheme
     val status = statusText(app)
     val src = remember { MutableInteractionSource() }
     val shapes = ListItemDefaults.segmentedShapes(index, count)
+    val about = remember(app.description) { app.description.replace(SPACES, " ").trim() }
     // Swipe left to favorite (or unfavorite); the row springs back once the heart has filled.
-    SwipeRow(shapes.shape, modifier.padding(horizontal = 16.dp), left = SwipeAction(if (fav) Sym.HeartBroken else Sym.Favorite, if (fav) "Remove from favorites" else "Add to favorites",
+    SwipeRow(shapes.shape, modifier.padding(horizontal = 16.dp).focusRing(src, shapes.shape), left = SwipeAction(if (fav) Sym.HeartBroken else Sym.Favorite, if (fav) "Remove from favorites" else "Add to favorites",
         cs.tertiaryContainer, cs.onTertiaryContainer, removes = false) { vm.toggleFavorite(app.id) }) {
     SegmentedListItem({ vm.haptic(H.SELECTION); vm.selectApp(app, "list") }, shapes,
-        leadingContent = { AppIcon(app, if (compact) 44.dp else 52.dp, from = "list") },
+        leadingContent = { AppIcon(app, if (compact) 40.dp else 52.dp, from = "list") },
         trailingContent = { StateBlob(app, src) },
-        overlineContent = if (compact) null else ({ Text(app.category, maxLines = 1) }),
+        overlineContent = if (compact) null else ({
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(categoryIcon(app.category), null, Modifier.size(14.dp), tint = cs.primary); Spacer(Modifier.width(4.dp))
+                Text(app.category, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }),
         supportingContent = {
-            Text(status?.first ?: listOf(app.author, app.size).filter { it.isNotEmpty() }.joinToString(" · "), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                color = status?.second ?: Color.Unspecified, fontWeight = if (status != null) FontWeight.Medium else null)
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Compact drops the category line, so its icon rides along here instead
+                    if (compact) { Icon(categoryIcon(app.category), app.category, Modifier.size(14.dp), tint = cs.primary); Spacer(Modifier.width(4.dp)) }
+                    Text(status?.first ?: listOf(app.author, app.size).filter { it.isNotEmpty() }.joinToString(" · "), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        color = status?.second ?: Color.Unspecified, fontWeight = if (status != null) FontWeight.Medium else null)
+                }
+                if (!compact && s.showAppAbout && about.isNotEmpty()) AboutPreview(about)
+            }
         },
         onLongClick = { vm.toggleFavorite(app.id) }, onLongClickLabel = if (fav) "Remove from favorites" else "Add to favorites",
-        colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer), interactionSource = src) {
+        colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer), contentPadding = if (compact) CompactRowPadding else ListItemDefaults.ContentPadding,
+        interactionSource = src) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(app.name, Modifier.weight(1f, false), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             AnimatedVisibility(fav, enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()), exit = scaleOut()) {
@@ -295,17 +312,33 @@ fun AppRow(vm: MainViewModel, app: AppItem, index: Int = 0, count: Int = 1, modi
     }
 }
 
+private val SPACES = Regex("\\s+")
+
+/** "About this app" in a classic row: two lines, then See more opens the rest in place. */
+@Composable
+private fun AboutPreview(text: String) {
+    val cs = MaterialTheme.colorScheme
+    var open by rememberSaveable(text) { mutableStateOf(false) }; var more by remember(text) { mutableStateOf(false) }
+    Column(Modifier.padding(top = 4.dp).animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec())) {
+        Text(text, maxLines = if (open) 14 else 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+            onTextLayout = { if (!open) more = it.hasVisualOverflow })
+        if (more || open) Text(if (open) "See less" else "See more...", Modifier.padding(top = 2.dp).clip(Pill).clickable { open = !open }.padding(vertical = 4.dp, horizontal = 2.dp),
+            style = MaterialTheme.typography.labelLarge, color = cs.primary)
+    }
+}
+
 /** Icon-first tile for grids and swimlanes on every platform. */
 @Composable
 fun AppTile(vm: MainViewModel, app: AppItem, from: String, modifier: Modifier = Modifier, width: Dp? = null) {
-    val featured = app.tags.any { it == "Featured" || it == "Editor's Choice" }; val cs = MaterialTheme.colorScheme
+    val featured = app.tags.any { it == "Featured" || it == "Editor's Choice" }; val cs = MaterialTheme.colorScheme; val compact = LocalS.current.compactMode
     BoxWithConstraints(modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())) {
         val w = maxWidth
-        Column(Modifier.fillMaxWidth().springClick(onLongClick = { vm.toggleFavorite(app.id) }) { vm.selectApp(app, from) }.padding(8.dp)) {
-            AppIcon(app, (w - 16.dp).coerceAtMost(96.dp), Modifier.align(Alignment.CenterHorizontally), state = true, from = from)
-            Spacer(Modifier.height(8.dp))
+        Column(Modifier.fillMaxWidth().springClick(onLongClick = { vm.toggleFavorite(app.id) }) { vm.selectApp(app, from) }.padding(if (compact) 6.dp else 8.dp)) {
+            AppIcon(app, (w - if (compact) 12.dp else 16.dp).coerceAtMost(if (compact) 72.dp else 96.dp), Modifier.align(Alignment.CenterHorizontally), state = true, from = from)
+            Spacer(Modifier.height(if (compact) 6.dp else 8.dp))
             // minLines keeps every tile the same height, so a two-line name scrolling into a lane never changes the lane height and shoves the page.
-            Text(app.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val lines = if (compact) 1 else 2
+            Text(app.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, minLines = lines, maxLines = lines, overflow = TextOverflow.Ellipsis)
             Text(if (featured) "Featured" else app.category.ifEmpty { app.size }, style = MaterialTheme.typography.labelMedium, maxLines = 1,
                 color = if (featured) cs.primary else cs.onSurfaceVariant)
         }
@@ -388,7 +421,7 @@ private fun Swimlane(vm: MainViewModel, c: StoreCollection, modifier: Modifier) 
     val all = (c.totalAppCount ?: 0) > c.apps.size
     SectionTitle(c.title, subtitle = c.subtitle, onMore = when { all -> ({ vm.showCollectionAll(c) }); c.filter != null -> ({ vm.categoryNavigate(c.filter) }); else -> null })
     LazyRow(contentPadding = PaddingValues(horizontal = 12.dp)) {
-        items(c.apps, key = { it.id }) { AppTile(vm, it, c.id, width = 100.dp) }
+        items(c.apps, key = { it.id }) { AppTile(vm, it, c.id, width = if (LocalS.current.compactMode) 84.dp else 100.dp) }
     }
 }
 
@@ -407,7 +440,7 @@ private fun UpdateDeck(vm: MainViewModel, c: StoreCollection, modifier: Modifier
             Text(c.apps.take(2).joinToString(", ") { it.name } + if (n > 2) " +${n - 2}" else "", style = MaterialTheme.typography.bodySmall,
                 color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        FilledTonalButton({ vm.haptic(H.MEDIUM); vm.updates.filter { it.platform == Platform.ANDROID && it.id !in d.activeDownloads && it.id !in d.readyToInstall }.forEach { vm.download(it) } },
+        FilledTonalButton({ vm.haptic(H.MEDIUM); vm.updates.filter { it.installsHere() && it.platform == c.apps.firstOrNull()?.platform && it.id !in d.activeDownloads && it.id !in d.readyToInstall }.forEach { vm.download(it) } },
             shapes = ButtonDefaults.shapes(), contentPadding = ButtonDefaults.SmallContentPadding) { Text("Update all") }
     }
 }

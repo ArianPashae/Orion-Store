@@ -81,7 +81,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
     val activeId = d.activeDownloads[app.id]; val cleanup = d.pendingCleanup[app.id]?.fileName; val ready = d.readyToInstall[app.id]
     val status = d.downloadStatus[app.id]; val progress = d.downloadProgress[app.id] ?: 0f
     val installing = vm.installingId == app.id; val scanning = vm.scanningId == app.id
-    val android = app.platform == Platform.ANDROID
+    val android = app.installsHere()
     val fallback = app.latestVersion == "Unknown" || app.version == "View on GitHub"
     val hasTarget = (app.downloadUrl.isNotEmpty() && app.downloadUrl != "#") || app.variants.isNotEmpty() || app.availableVersions.isNotEmpty()
     val unavailable = ready == null && cleanup == null && !installed && !hasTarget && app.latestVersion == "Latest" && app.size == "Varies"

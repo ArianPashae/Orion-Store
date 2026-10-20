@@ -115,7 +115,9 @@ private fun DevCoin(vm: MainViewModel, profile: DevProfile, slots: List<String>,
                 val z = kotlin.math.sin(a).toFloat(); scaleX = .85f + .2f * z; scaleY = scaleX; alpha = .7f + .3f * z
             }.clip(CircleShape).background(bg), contentAlignment = Alignment.Center) { Icon(ic, id, Modifier.size(20.dp), tint = fg) }
         }
-        Box(Modifier.size(128.dp).graphicsLayer { rotationY = rot; cameraDistance = 12 * density; shadowElevation = 16.dp.toPx(); shape = CircleShape }
+        // Same flip as the pilot card: no mirrored back face, and the shadow fades out edge-on
+        Box(Modifier.size(128.dp).graphicsLayer { rotationY = if (rot > 90f) rot - 180f else rot; cameraDistance = 12 * density
+                shadowElevation = 16.dp.toPx() * kotlin.math.abs(kotlin.math.cos(Math.toRadians(rot.toDouble()))).toFloat(); shape = CircleShape }
             .springClick(MaterialShapes.Cookie12Sided.toShape(), onClick = onTap), contentAlignment = Alignment.Center) {
             if (rot <= 90f) Box(Modifier.fillMaxSize().background(cs.primaryContainer), contentAlignment = Alignment.Center) {
                 // The initial paints at once; the photo fades over it if it ever loads (proxy, then direct), so a slow or dead link never shows as a wait.
@@ -124,7 +126,7 @@ private fun DevCoin(vm: MainViewModel, profile: DevProfile, slots: List<String>,
                 var stage by remember(img) { mutableIntStateOf(if (img.isEmpty() || img in deadImages) 2 else 0) }
                 if (stage < 2) AsyncImage(if (stage == 0) optimizedImageUrl(img, 256, 256) else img, profile.name, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                     onError = { if (++stage == 2) deadImages += img })
-            } else Column(Modifier.fillMaxSize().graphicsLayer { rotationY = 180f }.background(cs.tertiaryContainer), Arrangement.Center, Alignment.CenterHorizontally) {
+            } else Column(Modifier.fillMaxSize().background(cs.tertiaryContainer), Arrangement.Center, Alignment.CenterHorizontally) {
                 Icon(Sym.EmojiEventsFilled, null, Modifier.size(40.dp), tint = cs.onTertiaryContainer)
                 Text("Hall of\nFame", textAlign = TextAlign.Center, style = MaterialTheme.typography.labelLargeEmphasized, color = cs.onTertiaryContainer)
             }

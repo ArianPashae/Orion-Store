@@ -76,34 +76,36 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
         }
         itemsIndexed(visible, key = { _, it -> it.app.id }) { i, r -> LibraryRow(vm, r, Modifier.animateItem().reveal(i)) }
         // Ignored updates: listed with a one-tap undo, under All and Updates where a missing update would be noticed
-        val now = System.currentTimeMillis()
+        val now = System.currentTimeMillis(); val lookup = vm.lookup
         val ignored = if (filter == MyAppsFilter.ALL || filter == MyAppsFilter.UPDATES)
-            s.ignoredUpdates.keys.mapNotNull { id -> vm.allApps().firstOrNull { it.id == id }?.takeIf { isUpdateIgnored(it, s, now) } } else emptyList()
+            s.ignoredUpdates.keys.mapNotNull { id -> lookup[id]?.takeIf { isUpdateIgnored(it, s, now) } } else emptyList()
         if (ignored.isNotEmpty()) item("ignored-title") {
             Text("Ignored updates · ${ignored.size}", Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMediumEmphasized)
         }
+        // Segmented items draw their own rounded container, so the corners come out the same on every GPU instead of depending on clip support
         itemsIndexed(ignored, key = { _, a -> "ignored-${a.id}" }) { i, a ->
             val until = when (s.ignoredUpdates[a.id]?.type) { "week" -> "Hidden for a week"; "version" -> "Hidden until the next version"; else -> "Hidden for good" }
-            ListItem({ Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                Modifier.animateItem().padding(horizontal = 16.dp).padding(bottom = 2.dp).clip(rowShape(i, ignored.size)).clickable { vm.selectApp(a) },
-                supportingContent = { Text(until) }, leadingContent = { AppIcon(a, 44.dp) },
+            SegmentedListItem({ vm.selectApp(a) }, ListItemDefaults.segmentedShapes(i, ignored.size), Modifier.animateItem().padding(horizontal = 16.dp),
+                supportingContent = { Text(until) }, leadingContent = { AppIcon(a, if (s.compactMode) 36.dp else 44.dp) },
                 trailingContent = { FilledTonalButton({ vm.set { it.copy(ignoredUpdates = it.ignoredUpdates - a.id) }; vm.haptic(H.SUCCESS) }, shapes = ButtonDefaults.shapes(),
                     contentPadding = ButtonDefaults.SmallContentPadding) { Text("Unignore") } },
-                colors = ListItemDefaults.colors(containerColor = cs.surfaceContainer))
+                colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer), contentPadding = if (s.compactMode) CompactRowPadding else ListItemDefaults.ContentPadding) {
+                Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
 
 @Composable
 private fun LibraryRow(vm: MainViewModel, r: MyAppRow, modifier: Modifier) {
-    val (icon, c) = tone(r); val cs = MaterialTheme.colorScheme
-    Column(modifier.fillMaxWidth().padding(horizontal = 8.dp).springClick { vm.selectApp(r.app, "lib") }.animateContentSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
+    val (icon, c) = tone(r); val cs = MaterialTheme.colorScheme; val compact = LocalS.current.compactMode
+    Column(modifier.fillMaxWidth().padding(horizontal = 8.dp).springClick { vm.selectApp(r.app, "lib") }.animateContentSize().padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            AppIcon(r.app, 52.dp, state = true, from = "lib")
-            Spacer(Modifier.width(16.dp))
+            AppIcon(r.app, if (compact) 40.dp else 52.dp, state = true, from = "lib")
+            Spacer(Modifier.width(if (compact) 12.dp else 16.dp))
             Column(Modifier.weight(1f)) {
                 Text(r.app.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${r.app.author} · ${r.app.platform} · ${r.versionDetail}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (!compact) Text("${r.app.author} · ${r.app.platform} · ${r.versionDetail}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(icon, null, Modifier.size(14.dp), tint = c); Spacer(Modifier.width(4.dp))
                     Text(r.statusLabel, style = MaterialTheme.typography.labelMedium, color = c, maxLines = 1)
@@ -122,7 +124,7 @@ private fun LibraryRow(vm: MainViewModel, r: MyAppRow, modifier: Modifier) {
                 else -> Icon(Sym.ChevronRight, "Open details", tint = cs.onSurfaceVariant)
             }
         }
-        if (r.status == "downloading") Row(Modifier.padding(start = 68.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (r.status == "downloading") Row(Modifier.padding(start = if (compact) 52.dp else 68.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             val p by animateFloatAsState(r.progress / 100f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "p")
             LinearWavyProgressIndicator({ p }, Modifier.weight(1f)); Spacer(Modifier.width(12.dp))
             Text("${Math.round(r.progress)}%", style = MaterialTheme.typography.labelLarge)

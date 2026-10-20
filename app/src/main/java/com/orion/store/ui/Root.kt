@@ -63,7 +63,7 @@ fun OrionRoot(vm: MainViewModel) {
     val act = LocalActivity.current
     CompositionLocalProvider(LocalVm provides vm, LocalS provides s, LocalD provides d) {
         OrionTheme(s) { ThemeRevealHost {
-            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { SharedTransitionLayout { CompositionLocalProvider(LocalShared provides this) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { SharedTransitionLayout(if (Device.isTv) Modifier.padding(horizontal = 48.dp, vertical = 27.dp) else Modifier) { CompositionLocalProvider(LocalShared provides this) {
                 BackHandler { if (!vm.back()) act?.finish() }
                 val screen = when {
                     vm.forcedTest != null || vm.forcedBlocking -> 0
@@ -191,6 +191,8 @@ fun Header(vm: MainViewModel) {
         AnimatedVisibility(vm.storeUpdateAvailable) {
             FilledTonalIconButton({ vm.fBypassed = false; vm.loadApps(true) }, shapes = IconButtonDefaults.shapes()) { Icon(Sym.SystemUpdate, "Store update") }
         }
+        if (Device.isTv) TvBetaPill(vm)
+        if (vm.tab == Tab.ABOUT) IconButton({ vm.haptic(H.LIGHT); vm.open(Overlay.GUIDE) }) { Icon(Sym.MenuBook, "Know Orion") }
         val dl = d.activeDownloads.size; val up = vm.updates.size
         IconButton({ vm.openSettings() }) {
             BadgedBox({
@@ -210,6 +212,24 @@ fun Header(vm: MainViewModel) {
         }
     }
 }
+
+/** TV support is in beta: a pill in the header says so and leads to a prefilled bug report. */
+@Composable
+private fun TvBetaPill(vm: MainViewModel) {
+    val cs = MaterialTheme.colorScheme; var open by remember { mutableStateOf(false) }
+    val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Surface({ open = true; vm.haptic(H.LIGHT) }, Modifier.padding(end = 4.dp).focusRing(src, Pill), shape = Pill, color = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer, interactionSource = src) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Sym.Tv, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("TV · Beta", style = MaterialTheme.typography.labelLargeEmphasized)
+        }
+    }
+    if (open) AlertDialog({ open = false }, icon = { Icon(Sym.Tv, null) }, title = { Text("Orion on TV is in beta") },
+        text = { Text("Browse with your remote, and install TV and Android apps right on this TV. A few screens are still made for touch. If something feels off, report it and it gets fixed.") },
+        confirmButton = { TextButton({ open = false; vm.tracker.open(TV_BUG_URL) }) { Text("Report a TV bug") } },
+        dismissButton = { TextButton({ open = false }) { Text("Got it") } })
+}
+
+private const val TV_BUG_URL = "https://github.com/RookieEnough/Orion-Store/issues/new?title=%5BTV%20beta%5D%20&body=TV%20model%3A%20%0AAndroid%20TV%20version%3A%20%0AWhat%20happened%3A%20"
 
 @Composable
 private fun Logo(vm: MainViewModel) {
@@ -304,6 +324,9 @@ private fun Overlays(vm: MainViewModel) {
     AnimatedVisibility(Overlay.SETTINGS in vm.overlays, enter = slideInHorizontally { it / 3 } + fadeIn(), exit = slideOutHorizontally { it / 3 } + fadeOut()) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { SettingsScreen(vm) }
     }
+    AnimatedVisibility(Overlay.GUIDE in vm.overlays, enter = slideInVertically { it / 4 } + fadeIn(), exit = slideOutVertically { it / 4 } + fadeOut()) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { KnowOrionScreen(vm) { vm.close(Overlay.GUIDE) } }
+    }
     fun o(x: Overlay) = x in vm.overlays
     if (o(Overlay.RELEASE_NOTES)) ReleaseNotesSheet(vm) { vm.close(Overlay.RELEASE_NOTES) }
     if (o(Overlay.FAQ)) FaqSheet(vm) { vm.close(Overlay.FAQ) }
@@ -319,6 +342,20 @@ private fun Overlays(vm: MainViewModel) {
     vm.vtTarget?.let { VirusTotalSheet(vm, it) { vm.vtTarget = null } }
     if (vm.changeRequest) vm.selectedApp?.let { ChangeRequestSheet(vm, it) { vm.changeRequest = false } }
     vm.autoReport?.let { log -> AutoReportDialog(vm, log) }
+    if (vm.guidePrompt) GuidePromptDialog(vm)
+}
+
+/** One-time hello for 2.2.0: points everyone at Know Orion. */
+@Composable
+private fun GuidePromptDialog(vm: MainViewModel) {
+    val cs = MaterialTheme.colorScheme
+    fun done(open: Boolean) { vm.guidePrompt = false; vm.setFlag("guide", STORE_VERSION); if (open) { vm.haptic(H.SUCCESS); vm.open(Overlay.GUIDE) } }
+    AlertDialog({ done(false) },
+        icon = { MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Sunny), 0, 64.dp, cs.primaryContainer) { Icon(Sym.MenuBook, null, Modifier.size(30.dp), tint = cs.onPrimaryContainer) } },
+        title = { Text("Get to know Orion", style = MaterialTheme.typography.headlineSmallEmphasized) },
+        text = { Text("Every feature now lives in one field guide: backups, compact mode, XP and badges, the Hall of Fame, the Dino run and the rest. You can always find it on the Dev tab.") },
+        confirmButton = { Button({ done(true) }, shapes = ButtonDefaults.shapes()) { Text("Show me") } },
+        dismissButton = { TextButton({ done(false) }) { Text("Later") } })
 }
 
 /** Shown on the first start after a background pass that hit a problem. Failed updates stay ready to install with one tap. */

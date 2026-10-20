@@ -449,7 +449,7 @@ private fun risk(flagged: Int) = when {
 
 /** Downloaded APK first, then the installed APK, then a direct remote APK link. Android only. */
 fun scanTargetFor(app: AppItem, s: Settings, d: DataState): ScanTarget? {
-    if (app.platform != Platform.ANDROID) return null
+    if (!app.installsHere()) return null
     (d.readyToInstall[app.id] ?: d.pendingCleanup[app.id]?.fileName)?.let { return ScanTarget(ScanTargetType.DOWNLOADED_APK, "Downloaded APK", it) }
     if (!app.packageName.isNullOrEmpty() && !s.installedVersions[app.id].isNullOrEmpty()) return ScanTarget(ScanTargetType.APK, "Installed APK", app.packageName)
     val variant = (app.availableVersions.firstOrNull()?.variants?.firstOrNull()?.url ?: app.variants.firstOrNull()?.url)?.takeIf { it.isNotEmpty() }
@@ -734,7 +734,7 @@ fun WelcomeSheet(vm: MainViewModel) = OrionSheet(vm::finishWelcome) {
             Modifier.padding(top = 8.dp).reveal(2), style = ty.bodyLarge, color = cs.onSurfaceVariant, textAlign = TextAlign.Center)
         Column(Modifier.padding(top = 20.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             WELCOME_POINTS.forEachIndexed { i, (icon, title, desc) ->
-                ListItem({ Text(title, style = ty.titleMedium) }, Modifier.reveal(3 + i).clip(rowShape(i, WELCOME_POINTS.size)),
+                ListItem({ Text(title, style = ty.titleMedium) }, Modifier.reveal(3 + i).clip(colShape(i, WELCOME_POINTS.size)),
                     supportingContent = { Text(desc) }, leadingContent = { TonalIcon(icon, cs.primary) },
                     colors = ListItemDefaults.colors(containerColor = cs.surfaceContainer))
             }

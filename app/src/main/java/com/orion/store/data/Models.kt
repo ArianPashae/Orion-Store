@@ -7,6 +7,12 @@ val json = Json { ignoreUnknownKeys = true; coerceInputValues = true; explicitNu
 
 object Platform { const val ANDROID = "Android"; const val PC = "PC"; const val TV = "TV" }
 
+/** What this device runs, read once at process start before any screen or background job asks. */
+object Device { @Volatile var isTv = false }
+
+/** Android apps install everywhere; TV apps install natively too when Orion runs on a TV (beta). */
+fun AppItem.installsHere() = platform == Platform.ANDROID || (platform == Platform.TV && Device.isTv)
+
 enum class SortOption(val label: String) {
     HOME("Home Page"), NEWEST("Recently Added"), OLDEST("Oldest Added"), NAME_ASC("Name (A-Z)"),
     NAME_DESC("Name (Z-A)"), SIZE_ASC("Size (Smallest)"), SIZE_DESC("Size (Largest)")

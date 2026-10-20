@@ -59,7 +59,7 @@ private val HAPTICS = mapOf(
     H.SUCCESS to (longArrayOf(0, 35, 65, 21) to intArrayOf(0, 250, 0, 180)), H.WARNING to (longArrayOf(0, 30, 40, 30) to intArrayOf(0, 255, 0, 255)),
     H.ERROR to (longArrayOf(0, 27, 45, 50) to intArrayOf(0, 120, 0, 250)),
 )
-enum class Overlay { SETTINGS, RELEASE_NOTES, FAQ, SUBMISSION, AD_DONATION, CUSTOM_BUNDLE, PROFILE_STATS, NOTICE, TUTORIAL }
+enum class Overlay { SETTINGS, RELEASE_NOTES, FAQ, SUBMISSION, AD_DONATION, CUSTOM_BUNDLE, PROFILE_STATS, NOTICE, TUTORIAL, GUIDE }
 
 val FORCED_GUARD = setOf("scanning", "scan_complete", "installing", "install_failed", "export_ready", "byok_required", "ready_to_scan_or_install")
 val FORCED_TEST_PROGRESS = mapOf("checking" to 8, "downloading" to 64, "download_failed" to 32, "scanning" to 72, "installing" to 96)
@@ -98,7 +98,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun upd(fn: (DataState) -> DataState) = Store.data.update(fn)
     private fun now() = System.currentTimeMillis()
 
-    var tab by mutableStateOf(Tab.ANDROID)
+    /** Home tab: TV devices open on the TV catalog, unless it is hidden. */
+    val homeTab get() = if (Device.isTv && "tv" !in s.hiddenTabs) Tab.TV else Tab.ANDROID
+    var tab by mutableStateOf(if (Device.isTv && "tv" !in Store.settings.value.hiddenTabs) Tab.TV else Tab.ANDROID)
     var config by mutableStateOf<StoreConfig?>(null)
     var mirrorSource by mutableStateOf("")
     var devStatus by mutableStateOf("idle"); var devError by mutableStateOf<String?>(null)
@@ -187,7 +189,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             combine(settings, data.map { it.apps + it.importedApps }.distinctUntilChanged()) { st, all -> availableUpdates(all, st, now()) }.distinctUntilChanged().collect { u ->
                 updates = u
-                if (s.autoUpdateEnabled) u.filter { it.platform == Platform.ANDROID && it.id !in d.activeDownloads && it.id !in d.readyToInstall && it.id !in initializing }.forEach { download(it, auto = true) }
+                if (s.autoUpdateEnabled) u.filter { it.installsHere() && it.id !in d.activeDownloads && it.id !in d.readyToInstall && it.id !in initializing }.forEach { download(it, auto = true) }
             }
         }
         viewModelScope.launch {
@@ -257,10 +259,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // each waits until nothing else holds the screen, shows, and holds its turn until the user closes it. One at a time, never on
     // the forced update or maintenance screens, never over an open app, sheet or Settings.
     var welcomeOpen by mutableStateOf(false); var announceNow by mutableStateOf(false)
-    var tour by mutableStateOf(false); var donateOpen by mutableStateOf(false)
+    var tour by mutableStateOf(false); var donateOpen by mutableStateOf(false); var guidePrompt by mutableStateOf(false)
     private val turns = kotlinx.coroutines.sync.Mutex()
     private val screenFree get() = startupReady && !forcedBlocking && forcedTest == null && !((config?.maintenanceMode == true || s.localMaintenanceMode) && !bypassMaintenance) &&
-        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen &&
+        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen && !guidePrompt &&
         snackbar.currentSnackbarData == null
     // Polls every 400 ms: the gate mixes Compose state with the settings StateFlow. One boolean read, so it costs nothing
     private suspend fun untilFree() { while (!screenFree) delay(400) }
@@ -276,6 +278,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         config?.notice?.takeIf { it.show && it.id != flag("notice") }?.let { takeTurn { open(Overlay.NOTICE) } }
         if (d.apps.isNotEmpty() && !s.hasSeenModernUITutorial && s.storeLayout == "classic") takeTurn { tour = false; open(Overlay.TUTORIAL) }
         if (d.apps.isNotEmpty() && flag("tour") == null) takeTurn { tour = true; open(Overlay.TUTORIAL) }
+        // 2.2.0 brought Know Orion: every pilot hears about it once
+        if (flag("guide") == null) takeTurn { guidePrompt = true }
         // The megaphone lives in the store tabs' search bar, so wait for one of those to be on screen
         if (config?.announcement?.isNotBlank() == true && !announcementDismissed()) { while (tab.platform == null) delay(400); takeTurn { announceNow = true } }
     }
@@ -523,7 +527,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val safe = sanitizeDownloadUrl(target)
             if (safe == "#") { if (!auto) { error("Download link is invalid or unsupported."); haptic(H.ERROR) }; return }
             val std = safe.lowercase().let { it.endsWith(".apk") || it.endsWith(".exe") || it.endsWith(".zip") }
-            if (app.platform != Platform.ANDROID) { if (!auto && (std || app.platform == Platform.PC || app.platform == Platform.TV)) tracker.open(safe); return }
+            if (!app.installsHere()) { if (!auto && (std || app.platform == Platform.PC || app.platform == Platform.TV)) tracker.open(safe); return }
             if (Downloads.dir().usableSpace < 64L * 1024 * 1024) { if (!auto) error("Not enough space on device!"); return }
             val file = apkFileName(app, meta.first)
             val id = runCatching { Downloads.start(safe, file) }.getOrElse { if (!auto) tracker.open(safe); return }
@@ -891,7 +895,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun expandedMore() { returnToExpanded = expandedView; expandedView = null; viewAllApps = platformApps().reversed(); showAllSorted = true; tabUpd { it.copy(sort = SortOption.NEWEST) } }
 
-    fun visibleForTab(): List<AppItem> = visible.let { v -> if (tabState.filterFavorites) d.favorites.toSet().let { f -> v.filter { it.id in f } } else v }
+    private var favCache: Triple<List<AppItem>, List<String>, List<AppItem>>? = null
+    /** Favorites-filtered list is reused while the tab list and favorites are unchanged, so recompositions skip the filter and keep a stable reference. */
+    fun visibleForTab(): List<AppItem> {
+        val v = visible
+        if (!tabState.filterFavorites) return v
+        val fav = d.favorites
+        favCache?.let { (cv, cf, out) -> if (cv === v && cf === fav) return out }
+        return fav.toSet().let { f -> v.filter { it.id in f } }.also { favCache = Triple(v, fav, it) }
+    }
     fun classicApps() = if (showAllSorted) viewAllApps ?: visibleForTab() else visibleForTab()
     fun showModernHome() = s.storeLayout == "modern" && isModernHome(tabState)
 
@@ -899,9 +911,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (showAllSorted || !showModernHome()) return emptyList()
         val sort = effectiveSort
         if (sort != SortOption.HOME) return sortedModernCollections(visibleForTab(), sort)
-        val withUpdates = injectAfterHero(collections, if (tab == Tab.ANDROID) updatesCollection(updates.filter { it.platform == Platform.ANDROID }) else null)
-        val pmap = platformApps().associateBy { it.id }
-        val local = s.customBundles.map { cb -> BundleItem(cb.id, cb.title, cb.description, cb.appIds, cb.appIds.mapNotNull(pmap::get), badge = "Local", icon = cb.icon) }.filter { it.apps.isNotEmpty() }
+        val withUpdates = injectAfterHero(collections, if (tab == Tab.ANDROID || tab == Tab.TV && Device.isTv) updatesCollection(updates.filter { it.platform == tab.targetPlatform() }) else null)
+        if (s.customBundles.isEmpty()) return withUpdates
+        // The id map is already built off the main thread; only the platform check is left per app
+        val p = tab.targetPlatform()
+        val local = s.customBundles.map { cb -> BundleItem(cb.id, cb.title, cb.description, cb.appIds, cb.appIds.mapNotNull { id -> lookup[id]?.takeIf { it.platform == p } }, badge = "Local", icon = cb.icon) }.filter { it.apps.isNotEmpty() }
         if (local.isEmpty()) return withUpdates
         val idx = withUpdates.indexOfFirst { it.type == CollectionType.RECOMMENDATION_BUNDLES }
         if (idx == -1) return injectAfterHero(withUpdates, StoreCollection("recommendation_bundles_local", "Recommended app bundles", CollectionType.RECOMMENDATION_BUNDLES, "Curated picks for your platform", bundles = local))
@@ -923,7 +937,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (returnToExpanded == "new_updated") { expandedView = "new_updated"; expandedApps = platformApps().reversed().take(18); returnToExpanded = null }
             }
             canResetBrowse() && tab.platform != null -> restoreBrowse()
-            tab != Tab.ANDROID -> tab = Tab.ANDROID
+            tab != homeTab -> tab = homeTab
             else -> return false
         }
         return true

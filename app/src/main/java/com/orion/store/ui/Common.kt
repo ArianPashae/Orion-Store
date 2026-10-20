@@ -48,6 +48,8 @@ import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.border
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import coil3.imageLoader
@@ -91,6 +93,32 @@ private val FA: Map<String, ImageVector> = mapOf(
 fun faIcon(name: String?, fb: ImageVector = Sym.Apps): ImageVector =
     name?.split(' ')?.map { it.removePrefix("fa-") }?.firstNotNullOfOrNull { FA[it] } ?: fb
 
+/** Row padding while compact mode is on: about half the M3 list item default. */
+val CompactRowPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+
+private val CATEGORY_ICONS: List<Pair<List<String>, () -> ImageVector>> = listOf(
+    listOf("video", "stream", "movie", "film") to { Sym.Movie }, listOf("music", "audio") to { Sym.MusicNote },
+    listOf("photo", "camera") to { Sym.PhotoCamera }, listOf("graphic", "creative", "design") to { Sym.Draw },
+    listOf("media") to { Sym.PermMedia }, listOf("social", "communicat", "chat", "messag") to { Sym.Forum },
+    listOf("educat", "learn", "study") to { Sym.School }, listOf("privacy") to { Sym.Shield },
+    listOf("security", "antivirus") to { Sym.Security }, listOf("activat", "licen") to { Sym.Key },
+    listOf("develop", "code", "programm") to { Sym.Code }, listOf("entertain") to { Sym.Celebration },
+    listOf("productiv", "office", "notes") to { Sym.Work }, listOf("wallpaper") to { Sym.Wallpaper },
+    listOf("custom", "theme", "launcher") to { Sym.Palette }, listOf("health", "fitness") to { Sym.MonitorHeart },
+    listOf("emulat", "gam") to { Sym.SportsEsports }, listOf("sport") to { Sym.EmojiEvents },
+    listOf("monitor") to { Sym.QueryStats }, listOf("optimi", "clean", "speed") to { Sym.Speed },
+    listOf("novel", "read", "book", "comic", "manga") to { Sym.MenuBook }, listOf("browser", "web") to { Sym.Public },
+    listOf("automat") to { Sym.SmartToy }, listOf("network", "vpn", "proxy") to { Sym.Lan },
+    listOf("file", "recover", "storage") to { Sym.Folder }, listOf("install") to { Sym.InstallMobile },
+    listOf("system", "root", "mod") to { Sym.Memory }, listOf("util", "tool") to { Sym.HomeRepairService },
+)
+private val categoryIcons = HashMap<String, ImageVector>()
+
+/** Glyph for the catalog's free-form categories ("Utility/Networking", "Health & Fitness"): the first part that names something known wins. */
+fun categoryIcon(category: String): ImageVector = categoryIcons.getOrPut(category) {
+    category.lowercase().split('/', '&', ',').firstNotNullOfOrNull { part -> CATEGORY_ICONS.firstOrNull { (keys, _) -> keys.any { it in part } }?.second?.invoke() } ?: Sym.Category
+}
+
 /** Images whose proxy and direct fetch both failed this session: later screens go straight to the fallback instead of waiting out two timeouts again. */
 val deadImages: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
 
@@ -128,9 +156,19 @@ fun Modifier.readableWidth() = wrapContentWidth().widthIn(max = 840.dp)
 @Composable
 fun Modifier.springClick(shape: Shape = RoundedCornerShape(20.dp), onLongClick: (() -> Unit)? = null, src: MutableInteractionSource = remember { MutableInteractionSource() }, onClick: () -> Unit): Modifier {
     val pressed by src.collectIsPressedAsState(); val vm = LocalVm.current
-    val k by animateFloatAsState(if (pressed) .94f else 1f, MaterialTheme.motionScheme.fastSpatialSpec(), label = "press")
+    val focused by src.collectIsFocusedAsState()
+    // D-pad and keyboard focus (TV remotes) lifts the card a little; touch never focuses, so phones never see it
+    val k by animateFloatAsState(if (pressed) .94f else if (focused) 1.04f else 1f, MaterialTheme.motionScheme.fastSpatialSpec(), label = "press")
     // Every card and tile in the app routes through here, so this is the one place that gives taps their tick.
-    return graphicsLayer { scaleX = k; scaleY = k }.clip(shape).combinedClickable(src, ripple(), onLongClick = onLongClick, onClick = { vm.haptic(H.SELECTION); onClick() })
+    return graphicsLayer { scaleX = k; scaleY = k }.focusRing(src, shape).clip(shape).combinedClickable(src, ripple(), onLongClick = onLongClick, onClick = { vm.haptic(H.SELECTION); onClick() })
+}
+
+/** A primary ring around whatever has D-pad or keyboard focus, so a TV remote always shows where it is. */
+@Composable
+fun Modifier.focusRing(src: androidx.compose.foundation.interaction.InteractionSource, shape: Shape): Modifier {
+    val focused by src.collectIsFocusedAsState()
+    val w by animateDpAsState(if (focused) 3.dp else 0.dp, MaterialTheme.motionScheme.fastSpatialSpec(), label = "ring")
+    return if (w > 0.dp) border(w, MaterialTheme.colorScheme.primary, shape) else this
 }
 
 /** Rise-and-fade entrance for the first screenful, once per item (survives lazy recycling), staggered by [index].
@@ -306,6 +344,7 @@ fun GroupItem(i: Int, n: Int, modifier: Modifier = Modifier, selected: Boolean =
     if (onClick != null) Surface(onClick, m, shape = shape, color = color) { content() } else Surface(m, shape = shape, color = color) { content() }
 }
 
+/** Side-by-side segments: the first rounds its left end, the last its right end. Stacked lists use colShape. */
 fun rowShape(i: Int, n: Int) = RoundedCornerShape(if (i == 0) 20.dp else 4.dp, if (i == n - 1) 20.dp else 4.dp, if (i == n - 1) 20.dp else 4.dp, if (i == 0) 20.dp else 4.dp)
 
 /** Medium (56dp) M3E button: the screen's completion action. */

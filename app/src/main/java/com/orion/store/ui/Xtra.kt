@@ -345,7 +345,7 @@ fun GuardianSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
                                     exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec())) {
                                     Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                         a.permissions.forEachIndexed { j, p ->
-                                            Row(Modifier.fillMaxWidth().clip(rowShape(j, a.permissions.size)).background(cs.surfaceContainerLowest).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                                            Row(Modifier.fillMaxWidth().clip(colShape(j, a.permissions.size)).background(cs.surfaceContainerLowest).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
                                                 verticalAlignment = Alignment.CenterVertically) {
                                                 Icon(permIcon(p), null, Modifier.size(20.dp), tint = r.color)
                                                 Text(cleanPermName(p), Modifier.weight(1f).padding(horizontal = 12.dp), style = ty.labelLarge, fontFamily = FontFamily.Monospace)

@@ -70,7 +70,7 @@ object AutoUpdate {
             tracker.appInfo(pkg).takeIf { it.installed }?.let { id to it.version }
         }.toMap()
         val todo = availableUpdates(apps, s0.copy(installedVersions = live), now)
-            .filter { it.platform == Platform.ANDROID && it.id !in Store.data.value.activeDownloads && (s0.resolvedPackageNames[it.id] ?: it.packageName) != ctx.packageName }
+            .filter { it.installsHere() && it.id !in Store.data.value.activeDownloads && (s0.resolvedPackageNames[it.id] ?: it.packageName) != ctx.packageName }
         val log = mutableListOf<AutoResult>()
         for (app in todo) {
             if (uiVisible) break

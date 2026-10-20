@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -481,7 +482,18 @@ private fun PilotCard(s: Settings, name: String, avatarUrl: String, onAvatar: ()
     // Signing needs a still card: no sensor tilt or drag tilt while the back is up
     val tiltNow = { if (flipped) Offset.Zero else tilt.value }
     val serial = remember(name, s.userProfile?.createdAt) { (name + s.userProfile?.createdAt).hashCode().toUInt().toString().padStart(10, '0').chunked(4).joinToString(" · ") }
-    Box(Modifier.fillMaxWidth().aspectRatio(1.586f)
+    // Turn of the card in degrees: past edge-on it swings back toward the viewer instead of showing a mirrored back face
+    fun turnY(): Float { val t = tiltNow(); val face = if (flip > 90f) flip - 180f else flip; return face + (t.x * 12f + drag.value.x / 10f).coerceIn(-22f, 22f) }
+    fun turnX(): Float = (-tiltNow().y * 10f - drag.value.y / 10f).coerceIn(-22f, 22f)
+    Box(Modifier.fillMaxWidth().aspectRatio(1.586f)) {
+    // The shadow lives on its own flat layer that only narrows with the turn. A shadow cast by the 3D-turned card itself is projected
+    // by the renderer and smears into stretched black streaks below the card, worst in light mode.
+    Box(Modifier.matchParentSize().graphicsLayer {
+        scaleX = kotlin.math.abs(kotlin.math.cos(Math.toRadians(turnY().toDouble()))).toFloat()
+        scaleY = kotlin.math.abs(kotlin.math.cos(Math.toRadians(turnX().toDouble()))).toFloat()
+        shadowElevation = 18.dp.toPx() * scaleX; this.shape = shape; clip = false
+    })
+    Box(Modifier.matchParentSize()
         .pointerInput(Unit) { detectTapGestures { vm.haptic(H.LIGHT); flipped = !flipped } }
         .pointerInput(flipped) {
             if (!flipped) detectDragGestures(onDragEnd = { scope.launch { drag.animateTo(Offset.Zero, back) } }, onDragCancel = { scope.launch { drag.animateTo(Offset.Zero, back) } }) { c, dv ->
@@ -489,9 +501,9 @@ private fun PilotCard(s: Settings, name: String, avatarUrl: String, onAvatar: ()
             }
         }
         .graphicsLayer {
-            val t = tiltNow(); val dr = drag.value
-            rotationY = flip + (t.x * 12f + dr.x / 10f).coerceIn(-22f, 22f); rotationX = (-t.y * 10f - dr.y / 10f).coerceIn(-22f, 22f)
-            cameraDistance = 14 * density; shadowElevation = 18.dp.toPx(); this.shape = shape; clip = true
+            rotationY = turnY(); rotationX = turnX()
+            // Offscreen keeps the foil's overlay blend inside the card and gives the turned edges clean antialiasing
+            cameraDistance = 14 * density; this.shape = shape; clip = true; compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
         }
         .background(Brush.linearGradient(skin.first))
         .drawWithContent {
@@ -506,7 +518,7 @@ private fun PilotCard(s: Settings, name: String, avatarUrl: String, onAvatar: ()
         }) {
         Box(Modifier.align(Alignment.TopEnd).offset(60.dp, (-50).dp).size(200.dp).clip(MaterialShapes.Cookie12Sided.toShape()).background(on.copy(.06f)))
         CompositionLocalProvider(LocalContentColor provides on) {
-            if (flip > 90f) SignatureSide(s, Modifier.fillMaxSize().graphicsLayer { rotationY = 180f }.padding(16.dp)) { vm.set(it) }
+            if (flip > 90f) SignatureSide(s, Modifier.fillMaxSize().padding(16.dp)) { vm.set(it) }
             else Column(Modifier.fillMaxSize().padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(painterResource(com.orion.store.R.drawable.ic_splash_logo), null, Modifier.size(28.dp))
@@ -534,6 +546,7 @@ private fun PilotCard(s: Settings, name: String, avatarUrl: String, onAvatar: ()
             }
         }
     }
+}
 }
 
 private val INKS = listOf(Color(0xFF1B1B1F), Color(0xFF1D4ED8), Color(0xFFDC2626), Color(0xFF15803D), Color(0xFF7C3AED), Color(0xFFB45309))
@@ -602,9 +615,10 @@ private fun CountStat(icon: androidx.compose.ui.graphics.vector.ImageVector, c: 
     Row(modifier.clip(RoundedCornerShape(24.dp)).background(bg).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(40.dp).clip(MaterialShapes.Cookie6Sided.toShape()).background(fg.copy(.14f)), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(22.dp), tint = fg) }
         Spacer(Modifier.width(12.dp))
-        Column {
-            Text("$prefix$n$suffix", style = ty.titleLargeEmphasized, color = fg, maxLines = 1)
-            Text(label, style = ty.labelMedium, color = fg.copy(.8f), maxLines = 1)
+        // Narrow screens and large font scales shrink the text to fit instead of cutting "Downloaded" short
+        Column(Modifier.weight(1f)) {
+            Text("$prefix$n$suffix", style = ty.titleLargeEmphasized, color = fg, maxLines = 1, autoSize = TextAutoSize.StepBased(12.sp, ty.titleLargeEmphasized.fontSize))
+            Text(label, style = ty.labelMedium, color = fg.copy(.8f), maxLines = 1, autoSize = TextAutoSize.StepBased(8.sp, ty.labelMedium.fontSize))
         }
     }
 }

@@ -64,6 +64,8 @@ import kotlin.math.max
     val installerLabel: String = "",
     val disableAnimations: Boolean = false,
     val compactMode: Boolean = false,
+    /** Classic rows show a two-line "About this app" preview that expands in place. */
+    val showAppAbout: Boolean = true,
     val bottomNavScale: Float = 1f,
     val highRefreshRate: Boolean = true,
     val pullToRefreshCharacter: String = "cat",
@@ -217,9 +219,13 @@ class Persisted<T>(file: File, private val serializer: KSerializer<T>, default: 
 
     /** Writes now. Background jobs call this before finishing: the process may die before the debounced write lands. */
     fun save(state: T = value) = synchronized(atomic) {
+        val text = json.encodeToString(serializer, state)
+        // Transient-only changes (download progress ticks) serialize the same; skip rewriting an identical file
+        if (text == written) return@synchronized
         val out = atomic.startWrite()
-        runCatching { out.write(json.encodeToString(serializer, state).toByteArray()); atomic.finishWrite(out) }.onFailure { atomic.failWrite(out) }
+        runCatching { out.write(text.toByteArray()); atomic.finishWrite(out); written = text }.onFailure { atomic.failWrite(out) }
     }
+    private var written: String? = null
 
     init {
         @OptIn(FlowPreview::class)

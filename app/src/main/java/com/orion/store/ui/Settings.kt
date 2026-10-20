@@ -12,6 +12,9 @@ import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -102,7 +105,7 @@ fun identityExport(s: Settings, favorites: List<String>, now: Long): String {
         put("isLegend", s.isLegend); put("isContributor", s.isContributor); put("isDevUnlocked", s.isDevUnlocked)
         put("theme", s.theme); put("palette", s.palette); put("appFont", s.appFont); put("customFonts", json.encodeToJsonElement(s.customFonts)); put("storeLayout", s.storeLayout)
         put("isOled", s.isOled); put("hiddenTabs", json.encodeToJsonElement(s.hiddenTabs)); put("disableAnimations", s.disableAnimations)
-        put("compactMode", s.compactMode); put("bottomNavScale", jsNum(s.bottomNavScale)); put("highRefreshRate", s.highRefreshRate)
+        put("compactMode", s.compactMode); put("showAppAbout", s.showAppAbout); put("bottomNavScale", jsNum(s.bottomNavScale)); put("highRefreshRate", s.highRefreshRate)
         put("pullToRefreshCharacter", s.pullToRefreshCharacter); put("hapticEnabled", s.hapticEnabled); put("glassEffect", s.glassEffect)
         put("quickTiles", s.quickTiles?.let { json.encodeToJsonElement(it) } ?: JsonNull); put("settingsOrder", json.encodeToJsonElement(s.settingsOrder))
         put("autoUpdateEnabled", s.autoUpdateEnabled); put("wifiOnly", s.wifiOnly); put("stableOnly", s.stableOnly); put("deleteApk", s.deleteApk); put("useShizuku", s.useShizuku)
@@ -148,7 +151,7 @@ fun mergeIdentity(d: JsonObject, c: Settings): Settings =
         isLegend = d.or("isLegend", c.isLegend), isContributor = d.or("isContributor", c.isContributor), isDevUnlocked = d.or("isDevUnlocked", c.isDevUnlocked),
         theme = d.or("theme", c.theme), palette = d.or("palette", c.palette), appFont = d.or("appFont", c.appFont), customFonts = d.or("customFonts", c.customFonts),
         storeLayout = d.or("storeLayout", c.storeLayout), isOled = d.or("isOled", c.isOled), hiddenTabs = d.or("hiddenTabs", c.hiddenTabs),
-        disableAnimations = d.or("disableAnimations", c.disableAnimations), compactMode = d.or("compactMode", c.compactMode),
+        disableAnimations = d.or("disableAnimations", c.disableAnimations), compactMode = d.or("compactMode", c.compactMode), showAppAbout = d.or("showAppAbout", c.showAppAbout),
         bottomNavScale = d.or("bottomNavScale", c.bottomNavScale).takeIf { it.isFinite() } ?: c.bottomNavScale,
         highRefreshRate = d.or("highRefreshRate", c.highRefreshRate), pullToRefreshCharacter = d.or("pullToRefreshCharacter", c.pullToRefreshCharacter),
         hapticEnabled = d.or("hapticEnabled", c.hapticEnabled), glassEffect = d.or("glassEffect", c.glassEffect),
@@ -340,14 +343,21 @@ fun SettingsScreen(vm: MainViewModel) {
                             InfoCard("Save your progress to a file, or let Orion keep a copy in a cloud you pick. Nothing goes to an Orion server.", "Orion is serverless", Sym.CloudOff)
                         }
                         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val saving = remember { mutableStateOf(BackupPhase.IDLE) }
                             Button({
-                                scope.launch {
+                                scope.backupRun(saving, vm) {
                                     runCatching { vm.tracker.saveFile(identityExport(vm.s, vm.d.favorites, System.currentTimeMillis()), "orion_identity_${System.currentTimeMillis()}.osf") }
-                                        .onSuccess { importStatus = "Identity saved successfully." to "success"; vm.haptic(H.SUCCESS) }
-                                        .onFailure { importStatus = "Export failed: ${it.message}" to "error" }
+                                        .onSuccess { importStatus = "Identity saved successfully." to "success" }
+                                        .onFailure { importStatus = "Export failed: ${it.message}" to "error" }.isSuccess
                                 }
                             }, modifier = Modifier.weight(1f).heightIn(min = 64.dp), shapes = ButtonDefaults.shapes()) {
-                                Icon(Sym.FileUpload, null); Spacer(Modifier.width(8.dp)); Column { Text("Back up", fontWeight = FontWeight.Bold); Text("Signed .osf file", style = MaterialTheme.typography.labelSmall) }
+                                BackupGlyph(saving.value, 32.dp, MaterialTheme.colorScheme.onPrimary); Spacer(Modifier.width(8.dp))
+                                AnimatedContent(saving.value, transitionSpec = { (slideInVertically { it / 2 } + fadeIn()) togetherWith (slideOutVertically { -it / 2 } + fadeOut()) }, label = "save") { p ->
+                                    Column {
+                                        Text(when (p) { BackupPhase.WORKING -> "Saving..."; BackupPhase.DONE -> "Saved"; BackupPhase.FAILED -> "Failed"; else -> "Back up" }, fontWeight = FontWeight.Bold)
+                                        Text(if (p == BackupPhase.DONE) "Check your files" else "Signed .osf file", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
                             }
                             FilledTonalButton({
                                 scope.launch {
@@ -859,12 +869,79 @@ private fun CloudBackup(vm: MainViewModel, s: Settings) = Section("Cloud backup"
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("off" to "Off", "day" to "Daily", "week" to "Weekly", "month" to "Monthly").forEach { (id, label) -> Choice(s.cloudBackupEvery == id, label) { vm.set { it.copy(cloudBackupEvery = id) } } }
         }
-        val last = if (s.lastCloudBackup == 0L) "Never backed up" else "Last backup " + android.text.format.DateUtils.getRelativeTimeSpanString(s.lastCloudBackup)
-        SRow(Sym.FileUpload, "Back up now", last, onClick = { vm.cloudBackup(true) }) { Chevron() }
+        BackupNowRow(vm, s, where)
         SRow(Sym.CloudOff, "Disconnect", "Stop backing up. The file in your cloud stays.", onClick = {
             runCatching { ctx.contentResolver.releasePersistableUriPermission(uri, rw) }; vm.set { it.copy(cloudBackupUri = "", cloudBackupEvery = "off") }
         })
     }
+}
+
+private enum class BackupPhase { IDLE, WORKING, DONE, FAILED }
+
+/** Runs [work] as a visible backup: working for at least [minMs] so the motion reads, then done or failed for a beat, then back to idle. */
+private fun kotlinx.coroutines.CoroutineScope.backupRun(phase: MutableState<BackupPhase>, vm: MainViewModel, minMs: Long = 900, work: suspend () -> Boolean) {
+    if (phase.value != BackupPhase.IDLE) return
+    launch {
+        val started = System.currentTimeMillis(); phase.value = BackupPhase.WORKING; vm.haptic(H.LIGHT)
+        val ok = runCatching { work() }.getOrDefault(false)
+        delay((minMs - (System.currentTimeMillis() - started)).coerceAtLeast(0))
+        phase.value = if (ok) BackupPhase.DONE else BackupPhase.FAILED; vm.haptic(if (ok) H.SUCCESS else H.ERROR)
+        delay(2400); phase.value = BackupPhase.IDLE
+    }
+}
+
+/** Backup glyph: the arrow waits inside a wavy ring while working, then lands as a check on a turning cookie, or a cross on failure. */
+@Composable
+private fun BackupGlyph(phase: BackupPhase, size: androidx.compose.ui.unit.Dp = 40.dp, tint: Color = LocalAccent.current) {
+    val cs = MaterialTheme.colorScheme
+    val (bg0, fg0) = tonal(when (phase) { BackupPhase.DONE -> Safe; BackupPhase.FAILED -> cs.error; else -> tint })
+    val fx = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
+    val bg by animateColorAsState(bg0, fx, label = "bg"); val fg by animateColorAsState(fg0, fx, label = "fg")
+    val done by animateFloatAsState(if (phase == BackupPhase.DONE) 1f else 0f, MaterialTheme.motionScheme.slowSpatialSpec(), label = "done")
+    val morph = remember { androidx.graphics.shapes.Morph(MaterialShapes.Circle, MaterialShapes.Cookie9Sided) }
+    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+        Box(Modifier.matchParentSize().graphicsLayer { rotationZ = done * 90f }.clip(MorphShape(morph, done)).background(bg))
+        if (phase == BackupPhase.WORKING) CircularWavyProgressIndicator(Modifier.matchParentSize(), color = fg, trackColor = Color.Transparent)
+        val pop = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+        AnimatedContent(phase, transitionSpec = {
+            (scaleIn(pop, .3f) + fadeIn()) togetherWith (scaleOut(targetScale = .3f) + fadeOut())
+        }, label = "glyph") { p ->
+            val icon = when (p) { BackupPhase.DONE -> Sym.Check; BackupPhase.FAILED -> Sym.Close; else -> Sym.FileUpload }
+            Icon(icon, null, Modifier.size(size * .5f), tint = fg)
+        }
+    }
+}
+
+/** Cloud "Back up now" with feedback: the glyph runs, the caption follows each step, and the row warms green when the copy lands. */
+@Composable
+private fun BackupNowRow(vm: MainViewModel, s: Settings, where: String?) {
+    val scope = rememberCoroutineScope(); val cs = MaterialTheme.colorScheme
+    val phase = remember { mutableStateOf(BackupPhase.IDLE) }; val p = phase.value
+    val last = if (s.lastCloudBackup == 0L) "Never backed up" else "Last backup " + android.text.format.DateUtils.getRelativeTimeSpanString(s.lastCloudBackup)
+    val caption = when (p) { BackupPhase.WORKING -> "Sending your identity to ${where ?: "your cloud"}..."; BackupPhase.DONE -> "Backed up just now"; BackupPhase.FAILED -> "Backup failed, tap to try again"; else -> last }
+    val container by animateColorAsState(if (p == BackupPhase.DONE) androidx.compose.ui.graphics.lerp(cs.surfaceContainer, tonal(Safe).first, .6f) else cs.surfaceContainer,
+        MaterialTheme.motionScheme.slowEffectsSpec(), label = "row")
+    ListItem(
+        { Text("Back up now", style = MaterialTheme.typography.titleMedium) },
+        Modifier.clip(RoundedCornerShape(4.dp)).clickable(p == BackupPhase.IDLE) {
+            scope.backupRun(phase, vm) { val before = System.currentTimeMillis(); vm.cloudBackup(true).join(); vm.s.lastCloudBackup >= before }
+        },
+        supportingContent = {
+            AnimatedContent(caption, transitionSpec = { (slideInVertically { it / 2 } + fadeIn()) togetherWith (slideOutVertically { -it / 2 } + fadeOut()) }, label = "cap") { Text(it) }
+        },
+        leadingContent = { BackupGlyph(p) },
+        trailingContent = {
+            val pop = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+            AnimatedContent(p, transitionSpec = { (scaleIn(pop) + fadeIn()) togetherWith (scaleOut() + fadeOut()) }, label = "trail") {
+                when (it) {
+                    BackupPhase.WORKING -> LoadingIndicator(Modifier.size(32.dp))
+                    BackupPhase.DONE -> Text("Saved", style = MaterialTheme.typography.labelLargeEmphasized, color = tonal(Safe).second)
+                    else -> Chevron()
+                }
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = container),
+    )
 }
 
 @Composable
@@ -996,6 +1073,7 @@ private fun LayoutPicker(vm: MainViewModel, s: Settings) = Section("Store layout
             }
         }
     }
+    Toggle(Sym.Description, "About this app", "Classic rows preview each app's description, tap See more to read it all", s.showAppAbout) { vm.set { it.copy(showAppAbout = !it.showAppAbout) } }
 }
 
 /** Floating dock size, previewed live at the chosen scale. */
