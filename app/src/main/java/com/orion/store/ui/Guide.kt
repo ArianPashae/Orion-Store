@@ -36,9 +36,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** One thing Orion does. [go] jumps straight to it, when it has a home of its own. */
-private class Feature(val icon: ImageVector, val title: String, val body: String, val go: (MainViewModel.() -> Unit)? = null)
+class Feature(val icon: ImageVector, val title: String, val body: String, val go: (MainViewModel.() -> Unit)? = null)
 
 private class Chapter(val id: String, val title: String, val blurb: String, val icon: ImageVector, val color: Color, val shape: RoundedPolygon, val features: List<Feature>)
+
+/** Every feature with its chapter, in reading order: Orion AI answers "how do I..." from this and can open the right screen. */
+val GUIDE: List<Pair<String, Feature>> by lazy { CHAPTERS.flatMap { c -> c.features.map { c.title to it } } }
 
 private fun settings(page: String): MainViewModel.() -> Unit = { openSettings(page) }
 
@@ -53,6 +56,7 @@ private val CHAPTERS = listOf(
         Feature(Sym.Category, "Category shelves", "Expressive category blobs and lanes like Media, Social, Privacy and Utilities, each with an app count."),
         Feature(Sym.Layers, "App bundles", "Curated folders of apps that belong together. Open one to see every app, add or remove apps and install them one by one."),
         Feature(Sym.LibraryAdd, "Your own bundles", "Build a bundle in three steps: pick apps, give it a name, color and icon, then keep it local or submit it for everyone.", { open(Overlay.CUSTOM_BUNDLE) }),
+        Feature(Sym.AutoAwesome, "Orion AI", "Tap the star and describe what you need, like a free music app. Use your own Gemini, ChatGPT or Claude key, or a model that runs on the phone. Drag the star anywhere.", { open(Overlay.AI) }),
         Feature(Sym.Search, "Search", "The search pill at the top finds apps by name, developer, category or description, and forgives accents and typos in spacing."),
         Feature(Sym.SwapVert, "Sort and filter", "Sort by newest, oldest, name or size, and narrow the list to a single category with the filter buttons."),
         Feature(Sym.Favorite, "Favorites", "Long-press any card, swipe a classic row, or tap the heart on an app page. The heart filter shows only your favorites."),
@@ -111,11 +115,12 @@ private val CHAPTERS = listOf(
     Chapter("look", "Look and Feel", "Make Orion look and move the way you like.", Sym.Palette, Color(0xFFA855F7), MaterialShapes.Flower, listOf(
         Feature(Sym.LightMode, "Light, Dusk, Dark and OLED", "Four themes. The button in the search pill cycles them from anywhere with a circular reveal.", settings("visuals")),
         Feature(Sym.Palette, "Color palettes", "Fourteen palettes from Orion to Cocoa, each tuned for every theme.", settings("visuals")),
+        Feature(Sym.FormatColorFill, "Make your own palette", "Tap Make in the palette row, pick a primary color plus optional secondary and tertiary ones, choose Soft, Balanced or Vivid and preview it in every theme. Long-press your palette to edit it.", settings("visuals")),
         Feature(Sym.AutoAwesome, "Material You", "Take your colors from your wallpaper on Android 12 and newer.", settings("visuals")),
         Feature(Sym.FontDownload, "Fonts", "Eleven built-in fonts, or import your own TTF, OTF or WOFF2 file.", settings("visuals")),
         Feature(Sym.Compress, "Compact mode", "Smaller tiles, slimmer rows and an extra column, so more fits on every screen.", settings("visuals")),
         Feature(Sym.BlurOn, "Glass dock", "A floating, slightly translucent navigation dock that slides away while you scroll down.", settings("visuals")),
-        Feature(Sym.OpenInFull, "Dock size", "Scale the dock between compact and large with a live preview.", settings("visuals")),
+        Feature(Sym.OpenInFull, "Dock size", "Scale the dock between compact and large with a live preview. It starts compact.", settings("visuals")),
         Feature(Sym.TouchApp, "Haptic feedback", "Tactile ticks on taps, toggles and successes.", settings("visuals")),
         Feature(Sym.Speed, "Smooth motion", "Prefer the highest refresh rate your screen offers.", settings("visuals")),
         Feature(Sym.MotionPhotosOff, "Disable animations", "Every transition snaps instantly.", settings("visuals")),
@@ -161,6 +166,9 @@ private val CHAPTERS = listOf(
     )),
 )
 
+/** Orion hides the status bar, so the plain insets read zero and the floating chips slid under the camera cutout. Its slot (and any cutout) is kept clear instead. */
+private val GuideTop @Composable get() = WindowInsets.statusBarsIgnoringVisibility.union(WindowInsets.displayCutout.only(WindowInsetsSides.Top))
+
 /** Know Orion: the whole app as an expressive, searchable field guide. */
 @Composable
 fun KnowOrionScreen(vm: MainViewModel, onClose: () -> Unit) {
@@ -180,7 +188,7 @@ fun KnowOrionScreen(vm: MainViewModel, onClose: () -> Unit) {
     val chips = rememberLazyListState()
     val density = androidx.compose.ui.platform.LocalDensity.current
     // Rows land just below the floating chip bar instead of under it
-    val pin = WindowInsets.statusBars.getTop(density) + with(density) { 84.dp.roundToPx() }
+    val pin = GuideTop.getTop(density) + with(density) { 84.dp.roundToPx() }
     fun jump(ci: Int) {
         // Far chapters snap straight there: an animated fling across dozens of rows composes every one of them on the way
         val at = starts[ci]
@@ -190,7 +198,7 @@ fun KnowOrionScreen(vm: MainViewModel, onClose: () -> Unit) {
     LaunchedEffect(current) { if (current >= 0) { if (floating) chips.animateScrollToItem(current) else chips.requestScrollToItem(current) } }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize().background(cs.surface), list, contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
-        item("hero") { GuideHero(total, onClose) }
+        item("hero") { GuideHero(total) }
         item("search") { GuideSearch(query) { query = it } }
         item("chips") { ChapterChips(shown, -1, rememberLazyListState(), ::jump) }
         if (shown.isEmpty()) item("empty") { EmptyState(Sym.SearchOff, "Nothing matches “$query”", "Try a shorter word, like backup or theme.") }
@@ -213,7 +221,7 @@ fun KnowOrionScreen(vm: MainViewModel, onClose: () -> Unit) {
         }
     }
     // Past the top, chapters float in a rounded bar under the status bar, marking where you are
-    androidx.compose.animation.AnimatedVisibility(floating, Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.statusBars).padding(horizontal = 12.dp, vertical = 8.dp),
+    androidx.compose.animation.AnimatedVisibility(floating, Modifier.align(Alignment.TopCenter).windowInsetsPadding(GuideTop).padding(horizontal = 12.dp, vertical = 8.dp),
         enter = androidx.compose.animation.slideInVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) { -it } + androidx.compose.animation.fadeIn(),
         exit = androidx.compose.animation.slideOutVertically { -it } + androidx.compose.animation.fadeOut()) {
         Surface(shape = RoundedCornerShape(32.dp), color = cs.surfaceContainerHigh, shadowElevation = 6.dp) {
@@ -235,15 +243,14 @@ private fun ChapterChips(shown: List<Chapter>, current: Int, state: androidx.com
 private val HERO_SHAPES = listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Sunny, MaterialShapes.Clover4Leaf, MaterialShapes.Gem, MaterialShapes.Flower, MaterialShapes.SoftBurst)
 
 @Composable
-private fun GuideHero(total: Int, onClose: () -> Unit) {
+private fun GuideHero(total: Int) {
     val cs = MaterialTheme.colorScheme; val still = LocalS.current.disableAnimations
     var shape by remember { mutableIntStateOf(0) }
     LaunchedEffect(still) { if (!still) while (true) { delay(2600); shape++ } }
     Box(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(cs.primaryContainer, cs.surface)))) {
         Turning(MaterialShapes.Cookie12Sided, cs.primary.copy(.08f), 280.dp, Modifier.align(Alignment.TopEnd).offset(90.dp, (-40).dp), 50_000)
-        Column(Modifier.windowInsetsPadding(WindowInsets.statusBars).padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 12.dp)) {
-            FilledTonalIconButton(onClose, shapes = IconButtonDefaults.shapes()) { Icon(Sym.ArrowBack, "Close") }
-            MorphBlob(HERO_SHAPES, shape, 104.dp, cs.primary, Modifier.padding(top = 20.dp)) {
+        Column(Modifier.windowInsetsPadding(GuideTop).padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 12.dp)) {
+            MorphBlob(HERO_SHAPES, shape, 104.dp, cs.primary, Modifier.padding(top = 12.dp)) {
                 Icon(painterResource(com.orion.store.R.drawable.ic_splash_logo), null, Modifier.size(72.dp), tint = cs.onPrimary)
             }
             Text("FIELD GUIDE", Modifier.padding(top = 20.dp), style = MaterialTheme.typography.labelLargeEmphasized, color = cs.primary)

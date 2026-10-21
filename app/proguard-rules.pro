@@ -8,3 +8,6 @@
 -dontwarn com.android.org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn com.unity3d.**
+# On-device AI: LiteRT-LM is driven from JNI and reads its config through reflection
+-keep class com.google.ai.edge.litertlm.** { *; }
+-dontwarn com.google.ai.edge.litertlm.**

@@ -14,6 +14,8 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -98,7 +100,10 @@ private fun Home(vm: MainViewModel) {
     }
     Row(Modifier.fillMaxSize()) {
         if (wide) CompositionLocalProvider(LocalDensity provides navDensity) {
-            NavigationRail(containerColor = MaterialTheme.colorScheme.surfaceContainer, header = { Spacer(Modifier.height(12.dp)) }) {
+            NavigationRail(containerColor = MaterialTheme.colorScheme.surfaceContainer, header = {
+                Spacer(Modifier.height(12.dp))
+                if (s.aiButton) AiStarFace(vm, Modifier.padding(vertical = 8.dp))
+            }) {
                 Spacer(Modifier.weight(1f))
                 items.forEach { n -> NavigationRailItem(vm.tab == n.tab, { vm.navTo(n.tab) }, { NavIcon(n, vm.tab == n.tab, updateCount) }, label = { Text(n.label) }) }
                 Spacer(Modifier.weight(1f))
@@ -140,8 +145,41 @@ private fun Home(vm: MainViewModel) {
             if (!wide) CompositionLocalProvider(LocalDensity provides navDensity) {
                 FloatingNav(vm, items, updateCount, vm.navShown, Modifier.align(Alignment.BottomCenter))
             }
+            if (!wide && s.aiButton) AiStar(vm)
         }
     }
+}
+
+/** Orion AI's entry point: a small translucent star on a slowly turning cookie. Drag it anywhere; the spot is saved as a fraction
+ *  of the screen so it survives rotation. The rail gets the same star, fixed in place. */
+@Composable
+private fun AiStarFace(vm: MainViewModel, modifier: Modifier = Modifier, lifted: Boolean = false) {
+    val cs = MaterialTheme.colorScheme; val still = LocalS.current.disableAnimations
+    val spin by rememberInfiniteTransition(label = "star").animateFloat(0f, if (still) 0f else 360f, infiniteRepeatable(tween(14_000, easing = androidx.compose.animation.core.LinearEasing)), label = "spin")
+    val k by animateFloatAsState(if (lifted) 1.18f else 1f, MaterialTheme.motionScheme.fastSpatialSpec(), label = "lift")
+    val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Box(modifier.size(44.dp).graphicsLayer { scaleX = k; scaleY = k }.focusRing(src, CircleShape).clip(CircleShape)
+        .clickable(src, ripple()) { vm.haptic(H.MEDIUM); vm.open(Overlay.AI) }, contentAlignment = Alignment.Center) {
+        Box(Modifier.matchParentSize().graphicsLayer { rotationZ = spin }.clip(MaterialShapes.Cookie9Sided.toShape()).background(cs.primaryContainer.copy(alpha = .6f)))
+        Icon(Sym.AutoAwesome, "Orion AI", Modifier.size(22.dp), tint = cs.onPrimaryContainer)
+    }
+}
+
+@Composable
+private fun BoxScope.AiStar(vm: MainViewModel) = BoxWithConstraints(Modifier.matchParentSize()) {
+    val s = LocalS.current; val d = LocalDensity.current
+    val size = with(d) { 44.dp.toPx() }; val m = with(d) { 12.dp.toPx() }
+    val spanX = (constraints.maxWidth - size - 2 * m).coerceAtLeast(1f); val spanY = (constraints.maxHeight - size - 2 * m).coerceAtLeast(1f)
+    // Default spot: right edge, just above the dock
+    var x by remember { mutableFloatStateOf(s.aiFabX.takeIf { it >= 0f } ?: 1f) }; var y by remember { mutableFloatStateOf(s.aiFabY.takeIf { it >= 0f } ?: .84f) }
+    var dragging by remember { mutableStateOf(false) }
+    AiStarFace(vm, Modifier.offset { androidx.compose.ui.unit.IntOffset((m + x * spanX).toInt(), (m + y * spanY).toInt()) }
+        .pointerInput(spanX, spanY) {
+            detectDragGestures(onDragStart = { dragging = true; vm.haptic(H.LIGHT) }, onDragCancel = { dragging = false },
+                onDragEnd = { dragging = false; vm.set { it.copy(aiFabX = x, aiFabY = y) } }) { c, delta ->
+                c.consume(); x = (x + delta.x / spanX).coerceIn(0f, 1f); y = (y + delta.y / spanY).coerceIn(0f, 1f)
+            }
+        }, dragging)
 }
 
 /** Floating pill dock: the active destination grows into an icon + label indicator; slides away while scrolling down. */
@@ -314,6 +352,10 @@ private fun Overlays(vm: MainViewModel) {
     var lastApp by remember { mutableStateOf<AppItem?>(null) }
     vm.selectedApp?.let { lastApp = it }
     val sp = MaterialTheme.motionScheme.defaultSpatialSpec<Float>(); val fx = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    // Under the app page, so an app opened from the chat lands on top and backing out returns to the conversation
+    AnimatedVisibility(Overlay.AI in vm.overlays, enter = slideInVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) { it / 5 } + fadeIn(), exit = slideOutVertically { it / 5 } + fadeOut()) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { AiScreen(vm) { vm.close(Overlay.AI) } }
+    }
     AnimatedVisibility(vm.selectedApp != null, enter = fadeIn(fx) + scaleIn(sp, .92f), exit = fadeOut(fx) + scaleOut(targetScale = .94f)) {
         val r by transition.animateDp(label = "r") { if (it == EnterExitState.Visible) 0.dp else 48.dp }
         BackHandler { vm.selectedApp = null }

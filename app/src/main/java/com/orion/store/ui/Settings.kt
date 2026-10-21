@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.graphics.shapes.RoundedPolygon
 import com.orion.store.data.*
 import com.orion.store.platform.Installer
+import com.orion.store.platform.OrionAi
 import com.orion.store.platform.WirelessAdb
 import com.orion.store.platform.ResultHost
 import kotlinx.coroutines.Dispatchers
@@ -103,7 +104,7 @@ fun identityExport(s: Settings, favorites: List<String>, now: Long): String {
         put("adWatchCount", s.adWatchCount); put("submissionCount", s.submissionCount); put("changeRequestCount", s.changeRequestCount)
         put("lastSubmissionTime", s.lastSubmissionTime); put("lastLeaderboardSubmissionTime", s.lastLeaderboardSubmissionTime)
         put("isLegend", s.isLegend); put("isContributor", s.isContributor); put("isDevUnlocked", s.isDevUnlocked)
-        put("theme", s.theme); put("palette", s.palette); put("appFont", s.appFont); put("customFonts", json.encodeToJsonElement(s.customFonts)); put("storeLayout", s.storeLayout)
+        put("theme", s.theme); put("palette", s.palette); put("appFont", s.appFont); put("customFonts", json.encodeToJsonElement(s.customFonts)); put("customPalettes", json.encodeToJsonElement(s.customPalettes)); put("storeLayout", s.storeLayout)
         put("isOled", s.isOled); put("hiddenTabs", json.encodeToJsonElement(s.hiddenTabs)); put("disableAnimations", s.disableAnimations)
         put("compactMode", s.compactMode); put("showAppAbout", s.showAppAbout); put("bottomNavScale", jsNum(s.bottomNavScale)); put("highRefreshRate", s.highRefreshRate)
         put("pullToRefreshCharacter", s.pullToRefreshCharacter); put("hapticEnabled", s.hapticEnabled); put("glassEffect", s.glassEffect)
@@ -149,7 +150,7 @@ fun mergeIdentity(d: JsonObject, c: Settings): Settings =
         changeRequestCount = d.or("changeRequestCount", c.changeRequestCount), lastSubmissionTime = d.or("lastSubmissionTime", c.lastSubmissionTime),
         lastLeaderboardSubmissionTime = d.or("lastLeaderboardSubmissionTime", c.lastLeaderboardSubmissionTime),
         isLegend = d.or("isLegend", c.isLegend), isContributor = d.or("isContributor", c.isContributor), isDevUnlocked = d.or("isDevUnlocked", c.isDevUnlocked),
-        theme = d.or("theme", c.theme), palette = d.or("palette", c.palette), appFont = d.or("appFont", c.appFont), customFonts = d.or("customFonts", c.customFonts),
+        theme = d.or("theme", c.theme), palette = d.or("palette", c.palette), appFont = d.or("appFont", c.appFont), customFonts = d.or("customFonts", c.customFonts), customPalettes = d.or("customPalettes", c.customPalettes),
         storeLayout = d.or("storeLayout", c.storeLayout), isOled = d.or("isOled", c.isOled), hiddenTabs = d.or("hiddenTabs", c.hiddenTabs),
         disableAnimations = d.or("disableAnimations", c.disableAnimations), compactMode = d.or("compactMode", c.compactMode), showAppAbout = d.or("showAppAbout", c.showAppAbout),
         bottomNavScale = d.or("bottomNavScale", c.bottomNavScale).takeIf { it.isFinite() } ?: c.bottomNavScale,
@@ -528,6 +529,13 @@ fun SettingsScreen(vm: MainViewModel) {
                                 }
                             }
                         }
+                        Section("Orion AI") {
+                            Toggle(Sym.AutoAwesome, "AI star", "A small star you can drag anywhere, tap it to open Orion AI", s.aiButton) { vm.set { it.copy(aiButton = !it.aiButton) } }
+                            Toggle(Sym.Notifications, "AI sound effects", "Little chimes when you chat with Orion AI", s.aiSounds) { vm.set { it.copy(aiSounds = !it.aiSounds) } }
+                            SRow(Sym.Key, "Provider and key", OrionAi.provider(s.aiProvider).label + if (vm.ai.ready(s)) " · connected" else " · not connected",
+                                onClick = { modal = "ai" }) { Chevron() }
+                            SRow(Sym.Chat, "Open Orion AI", "Find apps by describing what you need", onClick = { vm.close(Overlay.SETTINGS); vm.open(Overlay.AI) }) { Chevron() }
+                        }
                     }
                     "developer" -> {
                         Section("Testing and debug") {
@@ -579,6 +587,7 @@ fun SettingsScreen(vm: MainViewModel) {
     }
     when (modal) {
         "guardian" -> GuardianSheet(vm) { modal = "none" }
+        "ai" -> AiSettingsSheet(vm) { modal = "none" }
         "sentinel" -> SentinelSheet(vm) { modal = "none" }
         "scanner" -> ScannerSheet(all) { modal = "none" }
     }
@@ -970,38 +979,52 @@ private fun StatHero(value: String, caption: String, action: @Composable () -> U
     }
 }
 
-/** Seed palettes as Android-style split swatches in the current theme. Picking one turns Material You off; the toggle below turns it back on. */
+/** Seed palettes as Android-style split swatches in the current theme, then the user's own and a tile to make one.
+ *  Picking one turns Material You off; the toggle below turns it back on. */
 @Composable
 private fun PalettePicker(vm: MainViewModel, s: Settings) {
     val cs = MaterialTheme.colorScheme; val reveal = LocalThemeReveal.current
     val theme = if (s.isOled) "oled" else s.theme
+    var maker by remember { mutableStateOf<CustomPalette?>(null) }; var making by remember { mutableStateOf(false) }
+    @Composable fun Swatch(p: Palette, onLong: (() -> Unit)? = null) {
+        val sc = p.scheme(theme); val on = !s.materialYouEnabled && s.palette == p.id
+        val at = remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+        Column(Modifier.width(64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(60.dp).trackCenter(at).springClick(if (on) MaterialShapes.Cookie9Sided.toShape() else CircleShape, onLongClick = onLong) {
+                vm.haptic(H.SELECTION)
+                val apply = { vm.set { it.copy(palette = p.id, materialYouEnabled = false) } }
+                if (reveal != null && !on) reveal.run(at.value, apply) else apply()
+            }, contentAlignment = Alignment.Center) {
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxWidth().weight(1f).background(sc.primary))
+                    Row(Modifier.fillMaxWidth().weight(1f)) {
+                        Box(Modifier.weight(1f).fillMaxHeight().background(sc.secondaryContainer))
+                        Box(Modifier.weight(1f).fillMaxHeight().background(sc.tertiary))
+                    }
+                }
+                if (on) Box(Modifier.size(24.dp).clip(CircleShape).background(sc.surface), contentAlignment = Alignment.Center) { Icon(Sym.Check, null, Modifier.size(16.dp), tint = sc.primary) }
+            }
+            Text(p.label, Modifier.padding(top = 8.dp), style = if (on) MaterialTheme.typography.labelLargeEmphasized else MaterialTheme.typography.labelLarge,
+                color = if (on) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
     Section("Palette") {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(cs.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            PALETTES.forEach { p ->
-                val sc = p.scheme(theme); val on = !s.materialYouEnabled && s.palette == p.id
-                val at = remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(60.dp).trackCenter(at).springClick(if (on) MaterialShapes.Cookie9Sided.toShape() else CircleShape) {
-                        vm.haptic(H.SELECTION)
-                        val apply = { vm.set { it.copy(palette = p.id, materialYouEnabled = false) } }
-                        if (reveal != null && !on) reveal.run(at.value, apply) else apply()
-                    }, contentAlignment = Alignment.Center) {
-                        Column(Modifier.fillMaxSize()) {
-                            Box(Modifier.fillMaxWidth().weight(1f).background(sc.primary))
-                            Row(Modifier.fillMaxWidth().weight(1f)) {
-                                Box(Modifier.weight(1f).fillMaxHeight().background(sc.secondaryContainer))
-                                Box(Modifier.weight(1f).fillMaxHeight().background(sc.tertiary))
-                            }
-                        }
-                        if (on) Box(Modifier.size(24.dp).clip(CircleShape).background(sc.surface), contentAlignment = Alignment.Center) { Icon(Sym.Check, null, Modifier.size(16.dp), tint = sc.primary) }
-                    }
-                    Text(p.label, Modifier.padding(top = 8.dp), style = if (on) MaterialTheme.typography.labelLargeEmphasized else MaterialTheme.typography.labelLarge,
-                        color = if (on) cs.primary else cs.onSurfaceVariant)
+            PALETTES.forEach { Swatch(it) }
+            s.customPalettes.forEach { cp -> Swatch(customScheme(cp)) { vm.haptic(H.LIGHT); maker = cp; making = true } }
+            Column(Modifier.width(64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.size(60.dp).springClick(MaterialShapes.Cookie9Sided.toShape()) { maker = null; making = true }.background(cs.primaryContainer), contentAlignment = Alignment.Center) {
+                    Icon(Sym.Add, "Make a palette", tint = cs.onPrimaryContainer)
                 }
+                Text("Make", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelLarge, color = cs.onSurfaceVariant)
             }
         }
+        s.customPalettes.firstOrNull { it.id == s.palette && !s.materialYouEnabled }?.let { cp ->
+            SRow(Sym.Edit, "Edit ${cp.name}", "Change its colors, style or name. Long-press any of your palettes to edit it.", onClick = { maker = cp; making = true }) { Chevron() }
+        }
     }
+    if (making) PaletteMakerSheet(vm, maker) { making = false }
 }
 
 /** Theme previews drawn from each real scheme; picking one sweeps the change across the screen from the tap. */
@@ -1012,7 +1035,7 @@ private fun ThemePicker(vm: MainViewModel, s: Settings) {
     Section("Theme") {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("light" to "Light", "dusk" to "Dusk", "dark" to "Dark", "oled" to "OLED").forEach { (t, label) ->
-                val p = previewScheme(t, s.palette); val on = current == t
+                val p = previewScheme(t, s.palette, s.customPalettes); val on = current == t
                 val at = remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
                 val r by animateDpAsState(if (on) 24.dp else 14.dp, MaterialTheme.motionScheme.fastSpatialSpec(), label = "r")
                 val ring by animateDpAsState(if (on) 3.dp else 0.dp, MaterialTheme.motionScheme.fastSpatialSpec(), label = "ring")
@@ -1080,7 +1103,7 @@ private fun LayoutPicker(vm: MainViewModel, s: Settings) = Section("Store layout
 @Composable
 private fun DockSize(vm: MainViewModel, s: Settings) = Section("Dock size") {
     val cs = MaterialTheme.colorScheme
-    val scale = s.bottomNavScale.takeIf { it.isFinite() } ?: 1f
+    val scale = s.bottomNavScale.takeIf { it.isFinite() } ?: .85f
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(cs.surfaceContainer).padding(16.dp)) {
         Box(Modifier.fillMaxWidth().height(96.dp), contentAlignment = Alignment.Center) {
             Row(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }.clip(Pill).background(cs.surfaceContainerHighest).padding(6.dp),

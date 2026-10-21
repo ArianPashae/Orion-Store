@@ -59,7 +59,7 @@ private val HAPTICS = mapOf(
     H.SUCCESS to (longArrayOf(0, 35, 65, 21) to intArrayOf(0, 250, 0, 180)), H.WARNING to (longArrayOf(0, 30, 40, 30) to intArrayOf(0, 255, 0, 255)),
     H.ERROR to (longArrayOf(0, 27, 45, 50) to intArrayOf(0, 120, 0, 250)),
 )
-enum class Overlay { SETTINGS, RELEASE_NOTES, FAQ, SUBMISSION, AD_DONATION, CUSTOM_BUNDLE, PROFILE_STATS, NOTICE, TUTORIAL, GUIDE }
+enum class Overlay { SETTINGS, RELEASE_NOTES, FAQ, SUBMISSION, AD_DONATION, CUSTOM_BUNDLE, PROFILE_STATS, NOTICE, TUTORIAL, GUIDE, AI }
 
 val FORCED_GUARD = setOf("scanning", "scan_complete", "installing", "install_failed", "export_ready", "byok_required", "ready_to_scan_or_install")
 val FORCED_TEST_PROGRESS = mapOf("checking" to 8, "downloading" to 64, "download_failed" to 32, "scanning" to 72, "installing" to 96)
@@ -129,6 +129,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var startupReady by mutableStateOf(false)
     // Declared before init: on a fresh install the migration callback fires synchronously from init
     var migratedFromWeb by mutableStateOf(false)
+    val ai = AiSession()
     var submissionCooldown by mutableStateOf<String?>(null)
     val snackbar = SnackbarHostState()
 
@@ -153,6 +154,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // 2.0: carry the web build's profile, badges and settings over, once
         if (!s.webMigrated) WebMigration.read(ctx, ::migrateWeb)
+        // 2.2.5: the dock starts compact. A dock still on the old 100% default moves over once; a size picked after that stays put.
+        if (flag("dock") == null) set { st -> st.copy(bottomNavScale = if (st.bottomNavScale == 1f) .85f else st.bottomNavScale, seenFlags = st.seenFlags + "dock=compact") }
+        // 2.2.5: "About this app" previews start off; rows that never had the switch touched follow the new default once
+        if (flag("about") == null) set { st -> st.copy(showAppAbout = false, seenFlags = st.seenFlags + "about=off") }
         // Tier badges follow the shared level, whichever XP source pushed it over
         viewModelScope.launch {
             combine(settings, data) { st, dt -> Xp.level(Xp.total(st, dt.appLibrary.size)) }.distinctUntilChanged().collect { lvl ->
@@ -647,6 +652,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         haptic(H.HEAVY); installingId = app.id
         if (k.isNotEmpty()) expectations[k] = InstallExpectation(app.id, meta.first)
         if (meta.second.isNotEmpty()) set { it.copy(appStreams = it.appStreams + (app.id to meta.second)) }
+        // The APK names its own package: a channel build (com.lagradost.cloudstream3.prerelease) is tracked under that name, not the catalog's
+        if (k.isNotEmpty()) withContext(Dispatchers.IO) { runCatching { tracker.archivePackage(tracker.resolve(file)) }.getOrNull() }
+            ?.takeIf { it.isNotBlank() && normalizePackageName(it) != k }?.let { p -> set { it.copy(resolvedPackageNames = it.resolvedPackageNames + (app.id to p)) } }
         try {
             when {
                 direct -> { WirelessAdb.install(ctx, tracker.resolve(file)); toast("Installed instantly") }
@@ -698,8 +706,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val byPkg = all.filter { !it.packageName.isNullOrBlank() }.groupBy { normalizePackageName(it.packageName) }
             val groups = LinkedHashMap<String, List<AppItem>>()
             targets.forEach { a -> val k = normalizePackageName(a.packageName); if (k.isNotEmpty() && k !in groups) groups[k] = byPkg[k] ?: listOf(a) }
-            val cand = groups.mapValues { (_, g) -> g.flatMap { packageCandidates(it, st.resolvedPackageNames[it.id]) }.distinct() }
-            Triple(groups, cand, if (groups.isEmpty()) emptyMap() else tracker.appInfos(cand.values.flatten().toSet()))
+            val installed = if (groups.isEmpty()) null else tracker.installedInfos()
+            val cand = groups.mapValues { (_, g) -> g.flatMap { packageCandidates(it, st.resolvedPackageNames[it.id], installed?.keys.orEmpty()) }.distinct() }
+            val all = cand.values.flatten().toSet()
+            Triple(groups, cand, when { groups.isEmpty() -> emptyMap(); installed != null -> all.associateWith { installed[it] ?: PkgInfo(false) }; else -> tracker.appInfos(all) })
         }
         if (groups.isEmpty()) return emptyMap()
         val ver = st.installedVersions.toMutableMap(); val res = st.resolvedPackageNames.toMutableMap(); val own = st.packageOwners.toMutableMap()
@@ -708,7 +718,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val hit = cand.getValue(k).firstOrNull { info[it]?.installed == true }; val v = hit?.let { info.getValue(it).version }.orEmpty()
             val owner = hit?.let { resolveOwnedAppId(g, k, v, st, expectations[k]) }
             if (hit == null || owner == null) {
-                own -= k; g.forEach { ver -= it.id; res -= it.id; out[it.id] = false to ""; if (hit == null && st.lastRemoteVersions[it.id] != null) stale += it.id }
+                // A pending install keeps the package its APK named, so a sync while the installer is open does not forget it
+                own -= k; g.forEach { ver -= it.id; if (expectations[k]?.appId != it.id) res -= it.id; out[it.id] = false to ""; if (hit == null && st.lastRemoteVersions[it.id] != null) stale += it.id }
             } else {
                 own[k] = owner
                 g.forEach { if (it.id == owner) { ver[it.id] = v; res[it.id] = hit; out[it.id] = true to v } else { ver -= it.id; res -= it.id; out[it.id] = false to "" } }

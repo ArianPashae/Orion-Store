@@ -85,11 +85,12 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
         // Segmented items draw their own rounded container, so the corners come out the same on every GPU instead of depending on clip support
         itemsIndexed(ignored, key = { _, a -> "ignored-${a.id}" }) { i, a ->
             val until = when (s.ignoredUpdates[a.id]?.type) { "week" -> "Hidden for a week"; "version" -> "Hidden until the next version"; else -> "Hidden for good" }
-            SegmentedListItem({ vm.selectApp(a) }, ListItemDefaults.segmentedShapes(i, ignored.size), Modifier.animateItem().padding(horizontal = 16.dp),
+            SegmentedListItem({ vm.selectApp(a) }, ListItemDefaults.segmentedShapes(i, ignored.size), Modifier.animateItem().padding(horizontal = 16.dp).then(if (s.compactMode) CompactRowHeight else Modifier),
                 supportingContent = { Text(until) }, leadingContent = { AppIcon(a, if (s.compactMode) 36.dp else 44.dp) },
                 trailingContent = { FilledTonalButton({ vm.set { it.copy(ignoredUpdates = it.ignoredUpdates - a.id) }; vm.haptic(H.SUCCESS) }, shapes = ButtonDefaults.shapes(),
                     contentPadding = ButtonDefaults.SmallContentPadding) { Text("Unignore") } },
-                colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer), contentPadding = if (s.compactMode) CompactRowPadding else ListItemDefaults.ContentPadding) {
+                colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer), contentPadding = if (s.compactMode) CompactRowPadding else ListItemDefaults.ContentPadding,
+                verticalAlignment = Alignment.CenterVertically) {
                 Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }

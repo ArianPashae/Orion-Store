@@ -15,15 +15,17 @@ android {
         applicationId = "com.orion.store"
         minSdk = 24
         targetSdk = 36
-        versionCode = 28
-        versionName = "2.2.0"
+        versionCode = 29
+        versionName = "2.2.5"
+        // Phones and TVs are ARM; the x86 builds of the native libraries only served emulators
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
     signingConfigs {
         if (keystore != null) create("release") {
             storeFile = rootProject.file(keystore.getProperty("storeFile"))
-            storePassword = keystore.getProperty("storePassword")
+            storePassword = System.getenv("ORION_STORE_PASSWORD") ?: keystore.getProperty("storePassword")
             keyAlias = keystore.getProperty("keyAlias")
-            keyPassword = keystore.getProperty("keyPassword")
+            keyPassword = System.getenv("ORION_KEY_PASSWORD") ?: System.getenv("ORION_STORE_PASSWORD") ?: keystore.getProperty("keyPassword")
         }
     }
     buildTypes {
@@ -43,6 +45,8 @@ android {
         // Orion ships as a GitHub download, so the download size wins over install-time extraction of the .so files
         jniLibs.useLegacyPackaging = true
         // BouncyCastle data for algorithms Orion never touches (post-quantum Picnic tables, PKIX reviewer messages)
+        // The on-device AI engine (about 10 MB) downloads the first time someone picks an on-device model, so it never ships in the APK
+        jniLibs.excludes += listOf("lib/arm64-v8a/liblitertlm_jni.so", "lib/x86_64/liblitertlm_jni.so")
         resources.excludes += listOf("org/bouncycastle/pqc/**", "org/bouncycastle/x509/CertPathReviewerMessages*", "org/bouncycastle/pkix/CertPathReviewerMessages*")
     }
     testOptions.unitTests.isIncludeAndroidResources = true
@@ -70,6 +74,8 @@ dependencies {
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
     implementation("org.conscrypt:conscrypt-android:2.7.0")
     implementation("com.unity3d.ads:unity-ads:4.21.0")
+    // Orion AI on-device models (LiteRT-LM)
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.1")
     implementation("androidx.fragment:fragment:1.8.9") // unity-ads drags in fragment 1.0.0, which breaks ActivityResult APIs
     testImplementation("junit:junit:4.13.2")
     // Screenshot harness (ShotsTest): ./gradlew :app:testDebugUnitTest --tests "*ShotsTest*" -Pshots

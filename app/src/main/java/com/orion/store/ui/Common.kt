@@ -93,8 +93,12 @@ private val FA: Map<String, ImageVector> = mapOf(
 fun faIcon(name: String?, fb: ImageVector = Sym.Apps): ImageVector =
     name?.split(' ')?.map { it.removePrefix("fa-") }?.firstNotNullOfOrNull { FA[it] } ?: fb
 
-/** Row padding while compact mode is on: about half the M3 list item default. */
-val CompactRowPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+/** Row padding while compact mode is on: about half the M3 list item default. Rows always pass centered alignment:
+ *  M3 top-aligns taller rows, which left the icon and download button above the middle. */
+val CompactRowPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+/** Compact rows size to their content instead of M3's fixed list-item minimum, which left empty space under short rows on some
+ *  screens. M3 only applies its minimum when the row has none of its own, so this sets one just above the padding. */
+val CompactRowHeight = Modifier.heightIn(min = CompactRowPadding.calculateTopPadding() + CompactRowPadding.calculateBottomPadding() + 1.dp)
 
 private val CATEGORY_ICONS: List<Pair<List<String>, () -> ImageVector>> = listOf(
     listOf("video", "stream", "movie", "film") to { Sym.Movie }, listOf("music", "audio") to { Sym.MusicNote },

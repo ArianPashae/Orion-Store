@@ -81,10 +81,14 @@ class AppTracker(private val ctx: Context) {
      *  a catalog sync probes about 12 package-name variants per app, which used to be ~12k IPCs on every boot. */
     fun appInfos(pkgs: Collection<String>): Map<String, PkgInfo> {
         if (pkgs.size <= 24) return pkgs.associateWith(::appInfo)
-        // Some OEM builds throw on the full list (oversized binder reply); fall back to per-package lookups instead of crashing the sync.
-        val all = runCatching { pm.getInstalledPackages(0).associateBy { it.packageName } }.getOrElse { return pkgs.associateWith(::appInfo) }
-        return pkgs.associateWith { p -> all[p]?.let { PkgInfo(true, it.versionName.orEmpty(), PackageInfoCompat.getLongVersionCode(it)) } ?: PkgInfo(false) }
+        val all = installedInfos() ?: return pkgs.associateWith(::appInfo)
+        return pkgs.associateWith { all[it] ?: PkgInfo(false) }
     }
+
+    /** Every installed package in one call. Some OEM builds throw on the full list (oversized binder reply): null, so callers fall back to per-package lookups. */
+    fun installedInfos(): Map<String, PkgInfo>? = runCatching {
+        pm.getInstalledPackages(0).associate { it.packageName to PkgInfo(true, it.versionName.orEmpty(), PackageInfoCompat.getLongVersionCode(it)) }
+    }.getOrNull()
 
     fun installedPackages(): List<Pair<String, String>> =
         pm.getInstalledPackages(PackageManager.GET_META_DATA).map { (it.applicationInfo?.loadLabel(pm)?.toString() ?: it.packageName) to it.packageName }

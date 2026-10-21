@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.view.Surface
+import com.orion.store.data.Device
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -47,8 +50,8 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        // Phones stay portrait; tablets and unfolded foldables rotate freely. A manifest lock forced tablets into a letterboxed portrait window.
-        requestedOrientation = if (resources.configuration.smallestScreenWidthDp >= 600) ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        // Phones stay portrait; tablets, foldables and TVs follow their screen. A manifest lock forced tablets into a letterboxed portrait window.
+        requestedOrientation = if (phoneShaped()) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         ResultHost.launch = { i, cb -> pending = cb; results.launch(i) }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         lifecycleScope.launch {
@@ -74,6 +77,16 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() { if (ResultHost.launch != null && isFinishing) ResultHost.launch = null; super.onDestroy() }
+
+    /** A small touch screen that is portrait at its natural rotation. TVs report about 540dp as their smallest width, so the
+     *  width check alone locked them sideways; boxes that skip the leanback flag still have a landscape natural rotation. */
+    private fun phoneShaped(): Boolean {
+        val c = resources.configuration
+        if (Device.isTv || !packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) || c.smallestScreenWidthDp >= 600) return false
+        @Suppress("DEPRECATION") val rot = (if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay)?.rotation ?: Surface.ROTATION_0
+        val sideways = rot == Surface.ROTATION_90 || rot == Surface.ROTATION_270
+        return (c.orientation == Configuration.ORIENTATION_LANDSCAPE) == sideways
+    }
 
     private fun handle(i: Intent?) {
         vm.deepLink(i?.data); vm.onNotificationIntent(i)

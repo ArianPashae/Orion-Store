@@ -24,6 +24,8 @@ import kotlin.math.max
 @Serializable data class UserProfile(val name: String, val avatarId: String? = null, val avatarUrl: String? = null, val createdAt: Long = 0)
 @Serializable data class CustomBundle(val id: String, val title: String, val description: String, val icon: String, val appIds: List<String>, val createdAt: Long = 0, val submittedAt: Long? = null)
 @Serializable data class AutoResult(val appId: String, val name: String, val version: String, val ok: Boolean, val error: String? = null, val at: Long)
+/** A palette from the palette maker: seed colors as ARGB. A null secondary or tertiary is derived from the primary. */
+@Serializable data class CustomPalette(val id: String, val name: String, val primary: Int, val secondary: Int? = null, val tertiary: Int? = null, val style: String = "balanced")
 @Serializable data class ForcedSnapshot(val schemaVersion: Int = 1, val targetVersion: String, val downloadFileName: String, val status: String, val downloadCompleted: Boolean, val exported: Boolean)
 
 @Serializable data class Settings(
@@ -31,6 +33,7 @@ import kotlin.math.max
     val palette: String = "orion",
     val appFont: String = "spaceGrotesk",
     val customFonts: List<CustomFont> = emptyList(),
+    val customPalettes: List<CustomPalette> = emptyList(),
     val storeLayout: String = "modern",
     val isOled: Boolean = false,
     val materialYouEnabled: Boolean = false,
@@ -65,8 +68,8 @@ import kotlin.math.max
     val disableAnimations: Boolean = false,
     val compactMode: Boolean = false,
     /** Classic rows show a two-line "About this app" preview that expands in place. */
-    val showAppAbout: Boolean = true,
-    val bottomNavScale: Float = 1f,
+    val showAppAbout: Boolean = false,
+    val bottomNavScale: Float = .85f,
     val highRefreshRate: Boolean = true,
     val pullToRefreshCharacter: String = "cat",
     val hapticEnabled: Boolean = true,
@@ -109,6 +112,16 @@ import kotlin.math.max
     val seenFlags: Set<String> = emptySet(),
     val devConfigEnabled: Boolean = false,
     val devConfigUrl: String = "",
+    /** Orion AI: the button on store tabs, chat sounds, and the provider in use. Keys stay on this device and only go to their own provider. */
+    val aiButton: Boolean = true,
+    val aiSounds: Boolean = true,
+    val aiProvider: String = "gemini",
+    val aiKeys: Map<String, String> = emptyMap(),
+    val aiModels: Map<String, String> = emptyMap(),
+    val aiBaseUrl: String = "",
+    /** The on-device model in use, and where the user dragged the AI star (fractions of the screen, -1 = default spot). */
+    val aiLocalModel: String = "",
+    val aiFabX: Float = -1f, val aiFabY: Float = -1f,
     @Transient val coinFlipHintCount: Int = 0,
 ) {
     fun toggleHiddenTab(tab: String): Settings {

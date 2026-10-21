@@ -441,9 +441,16 @@ fun versionMetaFromFileName(app: AppItem, file: String?, stream: String = "Stabl
 
 fun normalizePackageName(p: String?) = p?.trim()?.lowercase().orEmpty()
 
-fun packageCandidates(app: AppItem, resolved: String?): List<String> {
+/** One extra name segment that marks a release channel: ".prerelease", ".beta2", ".nightly_build", ".fdroid". */
+private val CHANNEL_SEGMENT = Regex("(pre|prerelease|beta|alpha|nightly|debug|dev|canary|preview|test|testing|staging|snapshot|rc|insider|next|edge|unstable|experimental|release|internal|fdroid|foss|play|gplay|github|libre)([0-9]+|_[a-z0-9_]+)?", RegexOption.IGNORE_CASE)
+
+/** Packages that count as this app being installed. Channel builds install beside the stable app under an extra segment, so any
+ *  installed package shaped like that is matched too, not just the suffixes Orion knows by name. */
+fun packageCandidates(app: AppItem, resolved: String?, installed: Collection<String> = emptyList()): List<String> {
     val p = app.packageName?.ifEmpty { null } ?: return emptyList()
-    return (listOfNotNull(resolved?.ifEmpty { null }, p) + Defaults.PACKAGE_SUFFIXES.map { p + it }).distinct()
+    val prefix = "$p."
+    val channels = installed.filter { it.length > prefix.length && it.startsWith(prefix, true) && CHANNEL_SEGMENT.matches(it.substring(prefix.length)) }.sorted()
+    return (listOfNotNull(resolved?.ifEmpty { null }, p) + Defaults.PACKAGE_SUFFIXES.map { p + it } + channels).distinct()
 }
 
 data class InstallExpectation(val appId: String, val version: String?)

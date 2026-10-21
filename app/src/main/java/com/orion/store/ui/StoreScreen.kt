@@ -279,8 +279,8 @@ fun AppRow(vm: MainViewModel, app: AppItem, index: Int = 0, count: Int = 1, modi
     // Swipe left to favorite (or unfavorite); the row springs back once the heart has filled.
     SwipeRow(shapes.shape, modifier.padding(horizontal = 16.dp).focusRing(src, shapes.shape), left = SwipeAction(if (fav) Sym.HeartBroken else Sym.Favorite, if (fav) "Remove from favorites" else "Add to favorites",
         cs.tertiaryContainer, cs.onTertiaryContainer, removes = false) { vm.toggleFavorite(app.id) }) {
-    SegmentedListItem({ vm.haptic(H.SELECTION); vm.selectApp(app, "list") }, shapes,
-        leadingContent = { AppIcon(app, if (compact) 40.dp else 52.dp, from = "list") },
+    SegmentedListItem({ vm.haptic(H.SELECTION); vm.selectApp(app, "list") }, shapes, if (compact) CompactRowHeight else Modifier,
+        leadingContent = { AppIcon(app, if (compact) 44.dp else 52.dp, from = "list") },
         trailingContent = { StateBlob(app, src) },
         overlineContent = if (compact) null else ({
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -301,7 +301,7 @@ fun AppRow(vm: MainViewModel, app: AppItem, index: Int = 0, count: Int = 1, modi
         },
         onLongClick = { vm.toggleFavorite(app.id) }, onLongClickLabel = if (fav) "Remove from favorites" else "Add to favorites",
         colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer), contentPadding = if (compact) CompactRowPadding else ListItemDefaults.ContentPadding,
-        interactionSource = src) {
+        verticalAlignment = Alignment.CenterVertically, interactionSource = src) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(app.name, Modifier.weight(1f, false), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             AnimatedVisibility(fav, enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()), exit = scaleOut()) {

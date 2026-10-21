@@ -114,6 +114,23 @@ class LogicTest {
         assertFalse(Xp.plausible(Settings(submissionCount = 1, changeRequestCount = 5), t))
     }
 
+    @Test fun channelPackages() {
+        val cs = AppItem(id = "cs", name = "CloudStream", packageName = "com.lagradost.cloudstream3")
+        val installed = listOf("com.lagradost.cloudstream3.prerelease", "com.lagradost.cloudstream3.plugins.manager", "com.lagradost.cloudstream3x", "com.lagradost.cloudstream3.beta2")
+        val c = packageCandidates(cs, null, installed)
+        assertTrue("com.lagradost.cloudstream3.prerelease" in c); assertTrue("com.lagradost.cloudstream3.beta2" in c)
+        assertFalse("com.lagradost.cloudstream3.plugins.manager" in c); assertFalse("com.lagradost.cloudstream3x" in c)
+        assertEquals("com.lagradost.cloudstream3", c[0]); assertEquals("x.y", packageCandidates(cs, "x.y").first())
+    }
+
+    @Test fun aiAnswers() {
+        val a = com.orion.store.platform.OrionAi.parse("<think>hmm</think>Try Metrolist [3] or ViMusic [7, 9]. **Both** are free.")
+        assertEquals("Try Metrolist or ViMusic. Both are free.", a.reply); assertEquals(listOf(3, 7, 9), a.picks)
+        val apps = listOf(AppItem(id = "m", name = "Metrolist", category = "Music", description = "YouTube Music client"), AppItem(id = "k", name = "Keyboard", category = "Tools"))
+        assertEquals(listOf(0), com.orion.store.platform.OrionAi.matches(apps, "I want to listen to songs for free", 5))
+        assertTrue(com.orion.store.platform.OrionAi.matches(apps, "hey whats orion", 5).isEmpty())
+    }
+
     @Test fun misc() {
         assertEquals(1, Xp.level(60)); assertEquals(2, Xp.level(61)); assertEquals(10, Xp.level(1185)); assertEquals(9, Xp.level(1184))
         assertEquals(30, Xp.level(14355)); assertEquals(50, Xp.level(55125)); assertEquals(Xp.start(50), 55125L)
