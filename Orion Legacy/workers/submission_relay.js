@@ -120,6 +120,18 @@ export default {
             if (![level, xp, adWatchCount, data.submissionCount, data.changeRequestCount].every(n => Number.isInteger(n) && n >= 0)) {
                  return new Response(JSON.stringify({ error: "Invalid stats." }), { status: 400, headers: CORS_HEADERS });
             }
+            // The ceilings an honest pilot can't pass, the same rules as Xp.plausible in the app: per-day caps on missions and
+            // submissions since 2026-01-01, XP that adds up from those counts, and a level that matches the XP
+            const DAY = 86400000, EPOCH = 1767225600000, now = Date.now();
+            const days = Math.max(1, Math.floor((now - EPOCH) / DAY) + 1);
+            const step = n => 50 + 10 * n + n * n;
+            const levelOf = x => { let l = 1; while (x >= step(l)) { x -= step(l); l++; } return l; };
+            const maxXp = adWatchCount * 40 + data.submissionCount * 100 + 2000 * 10 + 300 * days;
+            if (!Number.isInteger(data.timestamp) || Math.abs(now - data.timestamp) > 60 * 60 * 1000 ||
+                adWatchCount > 20 * days || data.submissionCount > 5 * days || data.changeRequestCount > data.submissionCount ||
+                xp > maxXp || level !== levelOf(xp)) {
+                 return new Response(JSON.stringify({ error: "Your progress failed the integrity check." }), { status: 400, headers: CORS_HEADERS });
+            }
 
             // Sanity Ceiling: Prevent hacked memory values
             if (level > 150 || xp > 1000000) {
@@ -160,7 +172,8 @@ ${JSON.stringify(data, null, 2)}
             return new Response(JSON.stringify({ success: true }), { headers: CORS_HEADERS });
 
         } catch (e) {
-            return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS_HEADERS });
+            // Bad JSON and anything unexpected: no internals in the reply
+            return new Response(JSON.stringify({ error: "Submission could not be processed." }), { status: 400, headers: CORS_HEADERS });
         }
     }
 
