@@ -61,7 +61,7 @@ fun ForcedGate(vm: MainViewModel) {
             Spacer(Modifier.height(32.dp))
             Box(Modifier.size(112.dp), contentAlignment = Alignment.Center) {
                 if (v.showProgress) ContainedLoadingIndicator(Modifier.size(112.dp))
-                else Box(Modifier.fillMaxSize().clip(MaterialShapes.Cookie9Sided.toShape()).background(tint.copy(.16f)), contentAlignment = Alignment.Center) {
+                else Box(Modifier.fillMaxSize().background(tint.copy(.16f), MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) {
                     Icon(when (v.tone) { "warning" -> Sym.ErrorOutline; "success" -> Sym.CheckCircle; else -> Sym.SystemUpdate }, null, Modifier.size(48.dp), tint = tint)
                 }
             }
@@ -193,9 +193,9 @@ fun Maintenance(vm: MainViewModel) {
     LaunchedEffect(still) { while (!still) { delay(2600); if (!game) k++ } }
     Box(Modifier.fillMaxSize().background(cs.surface)) {
         Box(Modifier.align(Alignment.TopStart).offset((-90).dp, (-70).dp).size(280.dp).graphicsLayer { rotationZ = spin }
-            .clip(MaterialShapes.SoftBurst.toShape()).background(cs.primaryContainer.copy(.5f)))
+            .background(cs.primaryContainer.copy(.5f), MaterialShapes.SoftBurst.toShape()))
         Box(Modifier.align(Alignment.BottomEnd).offset(100.dp, 80.dp).size(320.dp).graphicsLayer { rotationZ = -spin }
-            .clip(MaterialShapes.Cookie9Sided.toShape()).background(cs.tertiaryContainer.copy(.45f)))
+            .background(cs.tertiaryContainer.copy(.45f), MaterialShapes.Cookie9Sided.toShape()))
         // One screen, no scroll: the hero takes whatever height is left and shrinks on short phones or long messages
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 24.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {

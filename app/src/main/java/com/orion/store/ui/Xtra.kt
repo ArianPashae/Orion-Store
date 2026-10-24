@@ -104,7 +104,7 @@ fun Tag(text: String, c: Color, icon: ImageVector? = null) = Surface(shape = Pil
 @Composable
 fun Blob(icon: ImageVector, c: Color, size: Int = 44, shape: RoundedPolygon = MaterialShapes.Cookie6Sided) {
     val (bg, fg) = tonal(c)
-    Box(Modifier.size(size.dp).clip(shape.toShape()).background(bg), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size((size * .5f).dp), tint = fg) }
+    Box(Modifier.size(size.dp).background(bg, shape.toShape()), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size((size * .5f).dp), tint = fg) }
 }
 
 @Composable

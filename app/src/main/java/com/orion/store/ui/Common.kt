@@ -297,7 +297,7 @@ fun SectionTitle(title: String, modifier: Modifier = Modifier, subtitle: String?
 @Composable
 fun EmptyState(icon: ImageVector, title: String, body: String? = null, modifier: Modifier = Modifier) =
     Column(modifier.fillMaxWidth().padding(vertical = 64.dp, horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(96.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(96.dp).background(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) {
             Icon(icon, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(16.dp))
@@ -311,7 +311,7 @@ fun gradient(colors: List<String>, fb: List<Color>) = Brush.linearGradient(color
 fun SheetTitle(title: String, icon: ImageVector? = null, subtitle: String? = null) =
     Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         icon?.let {
-            Box(Modifier.size(44.dp).clip(MaterialShapes.Cookie6Sided.toShape()).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).background(MaterialTheme.colorScheme.primaryContainer, MaterialShapes.Cookie6Sided.toShape()), contentAlignment = Alignment.Center) {
                 Icon(it, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
             }
             Spacer(Modifier.width(14.dp))
@@ -334,7 +334,8 @@ fun OrionSheet(onDismiss: () -> Unit, dismissible: Boolean = true, content: @Com
     val dismiss by rememberUpdatedState(onDismiss)
     val close: () -> Unit = remember { { scope.launch { state.hide() }.invokeOnCompletion { dismiss() } } }
     ModalBottomSheet(onDismiss, sheetState = state, containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
-        CompositionLocalProvider(LocalSheetClose provides close) { content() }
+        // A sheet is its own window: shared elements can't measure across windows ("layouts are not part of the same hierarchy")
+        CompositionLocalProvider(LocalSheetClose provides close, LocalShared provides null) { content() }
     }
 }
 
@@ -387,7 +388,7 @@ fun MorphBlob(shapes: List<RoundedPolygon>, index: Int, size: Dp, color: Color, 
     LaunchedEffect(index) { if (index != to) { from = to; to = index; prog.snapTo(0f); prog.animateTo(1f, spec) } }
     val morph = remember(from, to) { Morph(shapes[from % shapes.size], shapes[to % shapes.size]) }
     Box(modifier.size(size), contentAlignment = Alignment.Center) {
-        Box(Modifier.matchParentSize().graphicsLayer { rotationZ = (to + prog.value - 1) * 90f }.clip(MorphShape(morph, prog.value)).background(color))
+        Box(Modifier.matchParentSize().graphicsLayer { rotationZ = (to + prog.value - 1) * 90f }.background(color, MorphShape(morph, prog.value)))
         content()
     }
 }

@@ -283,7 +283,7 @@ private fun Selectable(selected: Boolean, title: String, meta: String? = null, o
 private fun Spinner(shape: RoundedPolygon, color: Color, size: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier, periodMs: Int = 24_000) {
     val still = LocalS.current.calm
     val turn by rememberInfiniteTransition(label = "spin").animateFloat(0f, if (still) 0f else 360f, infiniteRepeatable(tween(periodMs, easing = LinearEasing)), label = "a")
-    Box(modifier.size(size).graphicsLayer { rotationZ = turn }.clip(shape.toShape()).background(color))
+    Box(modifier.size(size).graphicsLayer { rotationZ = turn }.background(color, shape.toShape()))
 }
 
 /** Quick Settings tile: rests as a rounded rectangle, turns into a filled pill when on. */
@@ -515,13 +515,17 @@ fun SettingsScreen(vm: MainViewModel) {
                                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Aa", style = MaterialTheme.typography.headlineSmallEmphasized); Chevron() }
                             }
                         }
-                        // Outside the segmented group, so the choices scroll from screen edge to screen edge
                         Text("Performance", Modifier.padding(start = 32.dp, top = 16.dp, bottom = 2.dp), style = MaterialTheme.typography.titleSmallEmphasized, color = tonal(LocalAccent.current).second)
-                        Text("Lite stops decorative motion on older phones. Boost keeps more images ready. Image changes apply after a restart.", Modifier.padding(horizontal = 32.dp),
+                        Text(if (s.perfMode == "auto") "Auto picks ${s.perf.replaceFirstChar { it.uppercase() }} for this phone. Lite stops decorative motion, Boost keeps more images ready."
+                            else "Lite stops decorative motion, Boost keeps more images ready. Image changes apply after a restart.", Modifier.padding(horizontal = 32.dp),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("auto" to "Auto", "lite" to "Lite", "balanced" to "Balanced", "boost" to "Boost").forEach { (id, label) ->
-                                Choice(s.perfMode == id, if (id == "auto") "Auto · ${s.copy(perfMode = "auto").perf.replaceFirstChar { it.uppercase() }}" else label) { vm.set { it.copy(perfMode = id) } }
+                        // One connected group across the page, the same 16dp margins as the groups below: no scrolling, nothing off to one side
+                        val modes = listOf("auto" to "Auto", "lite" to "Lite", "balanced" to "Balanced", "boost" to "Boost")
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+                            modes.forEachIndexed { i, (id, label) ->
+                                ToggleButton(s.perfMode == id, { vm.haptic(H.SELECTION); vm.set { it.copy(perfMode = id) } }, Modifier.weight(if (id == "balanced") 1.3f else 1f),
+                                    shapes = when (i) { 0 -> ButtonGroupDefaults.connectedLeadingButtonShapes(); modes.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes(); else -> ButtonGroupDefaults.connectedMiddleButtonShapes() },
+                                    contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, maxLines = 1) }
                             }
                         }
                         Section("Motion & feel") {
@@ -836,7 +840,7 @@ private fun Bento(vm: MainViewModel, cat: Cat, shared: @Composable (Cat) -> Modi
         CompositionLocalProvider(LocalContentColor provides fg) {
             Column(Modifier.fillMaxSize().padding(18.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(44.dp).clip(cat.shape.toShape()).background(fg.copy(.14f)), contentAlignment = Alignment.Center) { Icon(cat.icon, null, Modifier.size(24.dp)) }
+                    Box(Modifier.size(44.dp).background(fg.copy(.14f), cat.shape.toShape()), contentAlignment = Alignment.Center) { Icon(cat.icon, null, Modifier.size(24.dp)) }
                     Spacer(Modifier.weight(1f))
                     badge?.let { Badge(containerColor = fg, contentColor = bg) { Text(it, Modifier.padding(horizontal = 4.dp)) } }
                 }

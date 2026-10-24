@@ -211,7 +211,7 @@ fun KnowOrionScreen(vm: MainViewModel, onClose: () -> Unit) {
         }
         item("end") {
             Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(56.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(cs.primaryContainer), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(56.dp).background(cs.primaryContainer, MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) {
                     Icon(painterResource(com.orion.store.R.drawable.ic_splash_logo), null, Modifier.size(40.dp), tint = cs.onPrimaryContainer)
                 }
                 Text("That's all of Orion", Modifier.padding(top = 14.dp), style = MaterialTheme.typography.titleLargeEmphasized)
@@ -320,5 +320,5 @@ private fun FeatureRow(c: Chapter, f: Feature, i: Int, n: Int, onGo: () -> Unit)
 private fun Turning(shape: RoundedPolygon, color: Color, size: Dp, modifier: Modifier = Modifier, periodMs: Int = 20_000) {
     val still = LocalS.current.calm
     val r by rememberInfiniteTransition(label = "turn").animateFloat(0f, if (still) 0f else 360f, infiniteRepeatable(tween(periodMs, easing = LinearEasing)), label = "r")
-    Box(modifier.size(size).graphicsLayer { rotationZ = r }.clip(shape.toShape()).background(color))
+    Box(modifier.size(size).graphicsLayer { rotationZ = r }.background(color, shape.toShape()))
 }

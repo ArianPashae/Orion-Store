@@ -370,7 +370,7 @@ fun BundlePreviewSheet(vm: MainViewModel, b: BundleItem, onDismiss: () -> Unit) 
         } else LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp)) {
             item {
                 Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(64.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(cs.tertiaryContainer), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(64.dp).background(cs.tertiaryContainer, MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) {
                         if (b.icon != null) Icon(faIcon(b.icon), null, Modifier.size(30.dp), tint = cs.onTertiaryContainer)
                         else Text((b.monogram ?: b.title).take(2).uppercase(), style = ty.titleLarge, fontWeight = FontWeight.Black, color = cs.onTertiaryContainer)
                     }

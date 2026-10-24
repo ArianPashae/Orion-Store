@@ -124,7 +124,8 @@ private fun Home(vm: MainViewModel) {
                     }
                 },
                 floatingActionButtonPosition = FabPosition.Center,
-                containerColor = MaterialTheme.colorScheme.surface,
+                // The root Surface already paints the page; a second full-screen fill here was pure overdraw on every frame
+                containerColor = Color.Transparent,
             ) { pad ->
                 // Status bar is hidden; its slot is kept so the header clears the camera cutout, and content scrolls up through it.
                 val top = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
@@ -160,7 +161,7 @@ private fun AiStarFace(vm: MainViewModel, modifier: Modifier = Modifier, lifted:
     val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Box(modifier.size(44.dp).graphicsLayer { scaleX = k; scaleY = k }.focusRing(src, CircleShape).clip(CircleShape)
         .clickable(src, ripple()) { vm.haptic(H.MEDIUM); vm.open(Overlay.AI) }, contentAlignment = Alignment.Center) {
-        Box(Modifier.matchParentSize().graphicsLayer { rotationZ = spin }.clip(MaterialShapes.Cookie9Sided.toShape()).background(cs.primaryContainer.copy(alpha = .6f)))
+        Box(Modifier.matchParentSize().graphicsLayer { rotationZ = spin }.background(cs.primaryContainer.copy(alpha = .6f), MaterialShapes.Cookie9Sided.toShape()))
         Icon(Sym.AutoAwesome, "Orion AI", Modifier.size(22.dp), tint = cs.onPrimaryContainer)
     }
 }

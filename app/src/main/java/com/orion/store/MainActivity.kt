@@ -59,6 +59,8 @@ class MainActivity : ComponentActivity() {
         }
         if (savedInstanceState == null) handle(intent)
         setContent { OrionRoot(vm) }
+        // Compose paints every pixel from the first frame on, so the window background underneath is never seen: drop it to save a full-screen fill per frame
+        window.decorView.post { window.setBackgroundDrawable(null) }
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); handle(intent) }

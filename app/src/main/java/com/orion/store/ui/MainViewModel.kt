@@ -817,10 +817,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var warmed = false
-    /** Hero and first-lane screenshots of every tab, on unmetered networks only, after the first screen has had the network to itself. */
+    /** After the first screen has had the network to itself: the first screenful of icons of every tab goes into the memory cache
+     *  (from disk only on metered networks), so the first switch to PC or TV doesn't decode a whole page at once. Hero and
+     *  first-lane screenshots follow on unmetered networks. */
     private fun warmStorefront(f: Map<String, Pair<List<StoreCollection>, List<String>>>) = viewModelScope.launch {
         delay(2500)
-        if (runCatching { ctx.getSystemService(ConnectivityManager::class.java).isActiveNetworkMetered }.getOrDefault(true)) return@launch
+        val metered = runCatching { ctx.getSystemService(ConnectivityManager::class.java).isActiveNetworkMetered }.getOrDefault(true)
+        val loader = ctx.imageLoader
+        f.forEach { (p, front) ->
+            (front.first.take(4).flatMap { it.apps.take(8) } + visibleBy[p].orEmpty().take(12)).mapNotNull { it.icon.takeIf(String::isNotEmpty) }.distinct().forEach { icon ->
+                // Same data as RemoteIcon, so the cached bitmap is the one the tile asks for
+                loader.enqueue(ImageRequest.Builder(ctx).data(optimizedImageUrl(icon, 256, 256)).size(160)
+                    .networkCachePolicy(if (metered) CachePolicy.DISABLED else CachePolicy.ENABLED).build())
+            }
+        }
+        if (metered) return@launch
         prefetchShots(f.values.flatMap { (cols, _) -> cols.filter { it.type == CollectionType.HERO }.flatMap { c -> c.apps.flatMap { it.screenshots.take(2) } } }.distinct())
     }
     private fun openById(id: String, miss: String = "not found") { lookup[id]?.let { selectApp(it) } ?: toast("App ‘$id’ $miss") }

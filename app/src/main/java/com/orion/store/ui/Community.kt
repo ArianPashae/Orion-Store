@@ -111,7 +111,7 @@ private fun Section(step: Int, title: String, subtitle: String? = null, done: Bo
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(cs.surfaceContainer).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // Numbered cookie per step; it fills and turns into a check once the step has what it needs.
-            Box(Modifier.size(36.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(if (done) cs.primary else cs.primaryContainer), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(36.dp).background(if (done) cs.primary else cs.primaryContainer, MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) {
                 if (done) Icon(Sym.Check, "Done", Modifier.size(18.dp), tint = cs.onPrimary) else Text("$step", style = ty.titleSmallEmphasized, color = cs.onPrimaryContainer)
             }
             Spacer(Modifier.width(12.dp))
@@ -231,7 +231,7 @@ private fun NextBoss(ads: Int) {
     val (bg, fg) = tonal(BADGES[next.badge]?.second ?: cs.primary)
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(bg).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).clip(MaterialShapes.Cookie7Sided.toShape()).background(fg.copy(.14f)), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).background(fg.copy(.14f), MaterialShapes.Cookie7Sided.toShape()), contentAlignment = Alignment.Center) {
                 Icon(BADGES[next.badge]?.first ?: Sym.Lock, null, Modifier.size(24.dp), tint = fg)
             }
             Column(Modifier.weight(1f).padding(start = 14.dp)) {
@@ -516,7 +516,7 @@ private fun PilotCard(s: Settings, name: String, avatarUrl: String, onAvatar: ()
             drawCircle(Brush.radialGradient(listOf(Color.White.copy(.35f), Color.Transparent), center = Offset(size.width * (.5f - t.x * .6f), size.height * (.3f + t.y * .6f)), radius = size.width * .55f),
                 radius = size.width, center = Offset(size.width * (.5f - t.x * .6f), size.height * (.3f + t.y * .6f)))
         }) {
-        Box(Modifier.align(Alignment.TopEnd).offset(60.dp, (-50).dp).size(200.dp).clip(MaterialShapes.Cookie12Sided.toShape()).background(on.copy(.06f)))
+        Box(Modifier.align(Alignment.TopEnd).offset(60.dp, (-50).dp).size(200.dp).background(on.copy(.06f), MaterialShapes.Cookie12Sided.toShape()))
         CompositionLocalProvider(LocalContentColor provides on) {
             if (flip > 90f) SignatureSide(s, Modifier.fillMaxSize().padding(16.dp)) { vm.set(it) }
             else Column(Modifier.fillMaxSize().padding(20.dp)) {
@@ -613,7 +613,7 @@ private fun CountStat(icon: androidx.compose.ui.graphics.vector.ImageVector, c: 
     var shown by remember { mutableStateOf(false) }; LaunchedEffect(Unit) { shown = true }
     val n by animateIntAsState(if (shown) value else 0, tween(1100, easing = FastOutSlowInEasing), label = "count")
     Row(modifier.clip(RoundedCornerShape(24.dp)).background(bg).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(40.dp).clip(MaterialShapes.Cookie6Sided.toShape()).background(fg.copy(.14f)), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(22.dp), tint = fg) }
+        Box(Modifier.size(40.dp).background(fg.copy(.14f), MaterialShapes.Cookie6Sided.toShape()), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(22.dp), tint = fg) }
         Spacer(Modifier.width(12.dp))
         // Narrow screens and large font scales shrink the text to fit instead of cutting "Downloaded" short
         Column(Modifier.weight(1f)) {
@@ -677,7 +677,7 @@ private fun ProfileView(vm: MainViewModel, s: Settings, d: DataState, openBadges
                     val id = showcased.getOrNull(i)
                     val (ic, c) = id?.let { BADGES[it] } ?: (Sym.Lock to cs.onSurfaceVariant)
                     val (bg, fg) = tonal(c)
-                    Box(Modifier.size(56.dp).clip(MaterialShapes.Cookie12Sided.toShape()).background(if (id != null) bg else cs.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(56.dp).background(if (id != null) bg else cs.surfaceContainerHighest, MaterialShapes.Cookie12Sided.toShape()), contentAlignment = Alignment.Center) {
                         Icon(ic, id, Modifier.size(26.dp), tint = if (id != null) fg else c.copy(.45f))
                     }
                 }
@@ -914,7 +914,7 @@ private fun BundleSteps(step: Int) = Row(Modifier.fillMaxWidth().padding(horizon
     listOf("Details", "Apps", "Done").forEachIndexed { i, label ->
         val n = i + 1; val on = n <= step
         val bg by animateColorAsState(if (on) cs.primary else cs.surfaceContainerHighest, MaterialTheme.motionScheme.defaultEffectsSpec(), label = "step")
-        Box(Modifier.size(30.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(bg), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(30.dp).background(bg, MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) {
             if (n < step) Icon(Sym.Check, "Done", Modifier.size(16.dp), tint = cs.onPrimary)
             else Text("$n", style = ty.labelLargeEmphasized, color = if (on) cs.onPrimary else cs.onSurfaceVariant)
         }
@@ -932,9 +932,9 @@ private val TILT = listOf(-8f, 6f, -3f, 9f)
 @Composable
 private fun BundleCard(title: String, desc: String, icon: String, stops: List<Color>, apps: List<AppItem>) =
     Box(Modifier.fillMaxWidth().height(168.dp).clip(RoundedCornerShape(32.dp)).background(Brush.linearGradient(stops))) {
-        Box(Modifier.align(Alignment.TopEnd).offset(48.dp, (-40).dp).size(170.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(Color.White.copy(.12f)))
+        Box(Modifier.align(Alignment.TopEnd).offset(48.dp, (-40).dp).size(170.dp).background(Color.White.copy(.12f), MaterialShapes.Cookie9Sided.toShape()))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth(if (apps.isEmpty()) 1f else .58f).padding(20.dp)) {
-            Box(Modifier.size(44.dp).clip(MaterialShapes.Cookie6Sided.toShape()).background(Color.White.copy(.22f)), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).background(Color.White.copy(.22f), MaterialShapes.Cookie6Sided.toShape()), contentAlignment = Alignment.Center) {
                 Icon(faIcon(icon), null, tint = Color.White)
             }
             Text(title.trim().ifEmpty { "Your bundle" }, Modifier.padding(top = 12.dp), style = ty.titleLargeEmphasized, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1194,7 +1194,7 @@ fun SubmissionSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDis
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(cs.surfaceContainer).clickable { badge = !badge; vm.haptic(H.SELECTION) }
             .animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(36.dp).clip(MaterialShapes.Sunny.toShape()).background(cs.tertiaryContainer), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(36.dp).background(cs.tertiaryContainer, MaterialShapes.Sunny.toShape()), contentAlignment = Alignment.Center) {
                     Icon(Sym.Verified, null, Modifier.size(18.dp), tint = cs.onTertiaryContainer)
                 }
                 Spacer(Modifier.width(12.dp))
@@ -1238,7 +1238,7 @@ private fun ModeCard(title: String, desc: String, icon: ImageVector, shape: Roun
     val bg by animateColorAsState(if (on) cs.secondaryContainer else cs.surfaceContainer, fx, label = "bg")
     Column(modifier.springClick(RoundedCornerShape(24.dp), onClick = onClick).background(bg).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).clip(shape.toShape()).background(if (on) cs.primary else cs.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).background(if (on) cs.primary else cs.surfaceContainerHighest, shape.toShape()), contentAlignment = Alignment.Center) {
                 Icon(icon, null, Modifier.size(22.dp), tint = if (on) cs.onPrimary else cs.onSurfaceVariant)
             }
             Spacer(Modifier.weight(1f))

@@ -234,7 +234,7 @@ private fun initial(name: String) = java.text.Normalizer.normalize(name.trim().t
 @Composable
 private fun LetterHeader(letter: String, count: Int) = Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
     val cs = MaterialTheme.colorScheme
-    Box(Modifier.size(40.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(cs.primaryContainer), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(40.dp).background(cs.primaryContainer, MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) {
         Text(letter, style = MaterialTheme.typography.titleMediumEmphasized, color = cs.onPrimaryContainer)
     }
     Spacer(Modifier.width(12.dp))
@@ -262,7 +262,7 @@ private fun StateBlob(app: AppItem, src: MutableInteractionSource) {
             if (p <= 0f) CircularWavyProgressIndicator(Modifier.fillMaxSize()) else CircularWavyProgressIndicator({ prog }, Modifier.fillMaxSize())
             Icon(Sym.Download, "Downloading", Modifier.size(18.dp), tint = cs.primary)
         } else {
-            Box(Modifier.matchParentSize().graphicsLayer { rotationZ = k * 45f }.clip(MorphShape(morph, k)).background(look.bg))
+            Box(Modifier.matchParentSize().graphicsLayer { rotationZ = k * 45f }.background(look.bg, MorphShape(morph, k)))
             Icon(look.icon, null, Modifier.size(20.dp), tint = look.fg)
         }
     }
@@ -391,7 +391,7 @@ private fun HeroCard(vm: MainViewModel, app: AppItem, from: String, offset: () -
     val shape = RoundedCornerShape(28.dp)
     Box(Modifier.fillMaxSize().graphicsLayer { val k = 1f - abs(offset()) * .07f; scaleX = k; scaleY = k }.springClick(shape) { vm.selectApp(app, from) }.background(bg)) {
         Box(Modifier.align(Alignment.BottomEnd).offset(48.dp, 64.dp).size(190.dp).graphicsLayer { translationX = offset() * 90.dp.toPx(); rotationZ = offset() * 40f }
-            .clip(MaterialShapes.Cookie12Sided.toShape()).background(fg.copy(.08f)))
+            .background(fg.copy(.08f), MaterialShapes.Cookie12Sided.toShape()))
         val portrait = app.platform == Platform.ANDROID
         val shots = app.screenshots.take(if (portrait) 2 else 1)
         Box(Modifier.align(Alignment.BottomEnd).padding(end = if (portrait) 18.dp else 12.dp).offset(y = if (portrait) 40.dp else 22.dp)
@@ -456,7 +456,7 @@ private fun Recommended(vm: MainViewModel, c: StoreCollection, modifier: Modifie
         val (bg, fg) = iconColor(app)?.let { tonal(it) } ?: (cs.secondaryContainer to cs.onSecondaryContainer)
         val info = carouselItemDrawInfo
         Box(Modifier.fillMaxSize().maskClip(RoundedCornerShape(28.dp)).background(bg).clickable { vm.haptic(H.SELECTION); vm.selectApp(app, c.id) }) {
-            Box(Modifier.align(Alignment.TopCenter).padding(top = 20.dp).size(132.dp).clip(MaterialShapes.Cookie9Sided.toShape()).background(fg.copy(.1f)))
+            Box(Modifier.align(Alignment.TopCenter).padding(top = 20.dp).size(132.dp).background(fg.copy(.1f), MaterialShapes.Cookie9Sided.toShape()))
             // No shared hand-off here: the carousel offsets items in a graphics layer, so the return flight lands off target and then snaps
             AppIcon(app, 84.dp, Modifier.align(Alignment.TopCenter).padding(top = 44.dp), state = true)
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(16.dp).graphicsLayer {
@@ -503,7 +503,7 @@ private fun Categories(vm: MainViewModel, c: StoreCollection, modifier: Modifier
             val p by animateFloatAsState(if (pressed) 1f else 0f, MaterialTheme.motionScheme.fastSpatialSpec(), label = "m")
             Column(Modifier.width(88.dp).springClick(RoundedCornerShape(24.dp), src = src) { vm.categoryNavigate(card.label) }.padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(72.dp).graphicsLayer { rotationZ = p * 30f }.clip(MorphShape(morph, p)).background(bg), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(72.dp).graphicsLayer { rotationZ = p * 30f }.background(bg, MorphShape(morph, p)), contentAlignment = Alignment.Center) {
                     Icon(faIcon(card.icon, Sym.Layers), null, Modifier.size(30.dp).graphicsLayer { rotationZ = -p * 30f }, tint = fg)
                 }
                 Text(card.label, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
@@ -546,7 +546,7 @@ private fun Bundles(vm: MainViewModel, c: StoreCollection, modifier: Modifier) =
                 Box(Modifier.size(156.dp).drawBehind {
                     drawRoundRect(line, cornerRadius = CornerRadius(40.dp.toPx()), style = Stroke(2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 12f))))
                 }, contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(56.dp).clip(MaterialShapes.Cookie6Sided.toShape()).background(cs.primaryContainer), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(56.dp).background(cs.primaryContainer, MaterialShapes.Cookie6Sided.toShape()), contentAlignment = Alignment.Center) {
                         Icon(Sym.Add, null, tint = cs.onPrimaryContainer)
                     }
                 }
