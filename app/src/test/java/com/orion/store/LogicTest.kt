@@ -131,6 +131,37 @@ class LogicTest {
         assertTrue(com.orion.store.platform.OrionAi.matches(apps, "hey whats orion", 5).isEmpty())
     }
 
+    @Test fun managedAndIgnored() {
+        val a = AppItem(id = "a", name = "A", latestVersion = "2.0")
+        val s = Settings(installedVersions = mapOf("a" to "1.0"), installSources = mapOf("a" to "com.android.vending"))
+        assertEquals(listOf(a), availableUpdates(listOf(a), s, 0))
+        val skip = s.copy(skipOtherStores = true)
+        assertTrue(availableUpdates(listOf(a), skip, 0).isEmpty())
+        assertTrue(isManaged("a", skip.withManaged("a", true)))
+        assertFalse(isManaged("a", s.withManaged("a", false)))
+        assertTrue(s.withManaged("a", false).withManaged("a", true).appManage.isEmpty())
+        assertTrue(isManaged("a", skip.copy(installSources = mapOf("a" to "com.google.android.packageinstaller"))))
+        val now = 10L * ONE_WEEK_MS
+        assertTrue(isUpdateIgnored(a, s.ignoreUpdate("a", "week", null, now), now + 1000))
+        assertFalse(isUpdateIgnored(a, s.ignoreUpdate("a", "week", null, now), now + ONE_WEEK_MS))
+        assertTrue(isUpdateIgnored(a, s.ignoreUpdate("a", "version", "v2.0", now), now))
+        assertFalse(isUpdateIgnored(a.copy(latestVersion = "2.1"), s.ignoreUpdate("a", "version", "2.0", now), now))
+    }
+
+    @Test fun categoryWholeWords() {
+        val budget = AppItem(id = "b", name = "Pocket Budget", description = "Track expenses with a simple tracker", category = "Utility")
+        val player = AppItem(id = "p", name = "Tunes", description = "Offline music player", category = "Media")
+        assertFalse(appMatchesCategoryFilter(budget, "Music"))
+        assertTrue(appMatchesCategoryFilter(player, "Music"))
+    }
+
+    @Test fun installFailures() {
+        assertTrue("uninstall" in installFailureText("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Package x signatures do not match]", "X").second)
+        assertTrue("Secure Folder" in installFailureText("INSTALL_FAILED_UPDATE_INCOMPATIBLE", "X").second)
+        assertEquals("Phone storage is full", installFailureText("INSTALL_FAILED_INSUFFICIENT_STORAGE", "X").first)
+        assertTrue("INSTALL_FAILED_WEIRD" in installFailureText("Failure [INSTALL_FAILED_WEIRD]", "X").second)
+    }
+
     @Test fun misc() {
         assertEquals(1, Xp.level(60)); assertEquals(2, Xp.level(61)); assertEquals(10, Xp.level(1185)); assertEquals(9, Xp.level(1184))
         assertEquals(30, Xp.level(14355)); assertEquals(50, Xp.level(55125)); assertEquals(Xp.start(50), 55125L)

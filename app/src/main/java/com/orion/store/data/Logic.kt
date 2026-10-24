@@ -51,14 +51,64 @@ fun isUpdateIgnored(app: AppItem, s: Settings, now: Long): Boolean {
     return when (ig.type) {
         "never" -> true
         "week" -> ig.timestamp != null && now - ig.timestamp < ONE_WEEK_MS
-        "version" -> ig.version == preferredVersion(app, s.streamOf(app.id))
+        // Older builds stored latestVersion, which differs from the offered build when an app lists several versions
+        "version" -> isSameVersion(ig.version, preferredVersion(app, s.streamOf(app.id))) || isSameVersion(ig.version, app.latestVersion)
         else -> false
     }
 }
 
+/** The installer, when it is another store. Orion, the system installer screen, adb/Shizuku and unrecorded installs don't count. */
+fun otherStore(id: String, s: Settings): String? = s.installSources[id]?.takeIf { p ->
+    p.isNotEmpty() && p != com.orion.store.BuildConfig.APPLICATION_ID && p != "com.android.shell" && "packageinstaller" !in p && p != s.installerPackage
+}
+
+fun isManaged(id: String, s: Settings) = s.appManage[id] ?: !(s.skipOtherStores && otherStore(id, s) != null)
+
 fun availableUpdates(apps: List<AppItem>, s: Settings, now: Long) = apps.filter { a ->
     val inst = s.installedVersions[a.id]
-    !inst.isNullOrEmpty() && hasAvailableUpdate(a, inst, s.streamOf(a.id)) && !isUpdateIgnored(a, s, now)
+    !inst.isNullOrEmpty() && isManaged(a.id, s) && hasAvailableUpdate(a, inst, s.streamOf(a.id)) && !isUpdateIgnored(a, s, now)
+}
+// endregion
+
+// region install problems, in words anyone gets
+/** Why an APK can't go over what is already on the phone: a different signer installed here, hidden in another profile, or built in. */
+enum class Clash { INSTALLED, HIDDEN, SYSTEM }
+
+private const val HIDDEN_SPOTS = "Secure Folder, a Work profile, Dual apps or Second space"
+
+fun clashText(c: Clash, name: String): Pair<String, String> = when (c) {
+    Clash.INSTALLED -> "This won't install over your $name" to
+        "The $name on your phone came from somewhere else, like Play Store or a different mod. Android only lets an app be replaced by a copy from the same maker, and this one is from a different maker.\n\n" +
+        "Fix: uninstall your current $name, then install this one. Back up anything important first: uninstalling deletes the app's data."
+    Clash.HIDDEN -> "A hidden copy of $name is blocking this" to
+        "$name is gone from your home screen, but a copy is still on this phone: in $HIDDEN_SPOTS, or left behind by an uninstall that kept its data. That copy is from a different maker, so Android refuses this one.\n\n" +
+        "Fix: uninstall $name from there too (open Secure Folder or the other profile, then Settings, Apps, $name, Uninstall). Then try again."
+    Clash.SYSTEM -> "$name came with your phone" to
+        "$name is built into your phone, and Android only accepts updates for it from the phone maker. A modded copy can't replace it, even after removing it with Debloat.\n\n" +
+        "Fix: pick a version of the mod that installs as a separate app (often called non-root), or use root."
+}
+
+/** Turns pm, adb and PackageInstaller failures into a title and a plain explanation. */
+fun installFailureText(msg: String?, name: String): Pair<String, String> {
+    val m = msg.orEmpty(); val l = m.lowercase()
+    fun has(vararg k: String) = k.any { it.lowercase() in l }
+    return when {
+        has("UPDATE_INCOMPATIBLE", "signatures do not match", "SHARED_USER_INCOMPATIBLE", "INCONSISTENT_CERTIFICATES") -> "$name could not be installed" to
+            "Another copy of $name on this phone is from a different maker (like Play Store or another mod), and Android won't put this one over it.\n\n" +
+            "Fix: uninstall the current $name. Already did? A hidden copy may still be in $HIDDEN_SPOTS. Remove it there too, then try again."
+        has("VERSION_DOWNGRADE") -> "Your $name is newer" to "The $name on your phone is a newer version than this one, and Android won't go back to an older version. Uninstall it first if you really want this one."
+        has("INSUFFICIENT_STORAGE", "not enough space") -> "Phone storage is full" to "There isn't enough free space to install $name. Delete a few things and try again."
+        has("OLDER_SDK", "requires newer sdk") -> "Your Android is too old for this" to "This $name needs a newer Android version than your phone has."
+        has("NO_MATCHING_ABIS", "CPU_ABI") -> "Wrong build for your phone" to "This $name was built for a different phone processor. Pick another architecture on the app page."
+        has("DUPLICATE_PERMISSION", "CONFLICTING_PROVIDER", "DUPLICATE_PACKAGE") -> "Another app is in the way" to
+            "Another installed app already uses a part $name needs, usually a different version of the same mod. Uninstall that one first."
+        has("USER_RESTRICTED") -> "Your phone blocked the install" to
+            "A phone setting stopped it. On Xiaomi, turn on \"Install via USB\" in Developer options. Work or parental rules can block installs too."
+        has("VERIFICATION_FAILURE", "ABORTED", "VERIFICATION_TIMEOUT") -> "Android's security check stopped it" to "Play Protect or your phone's own scanner blocked $name. You can try again and choose Install anyway if it asks."
+        has("PARSE", "CORRUPT", "invalid", "INVALID_APK") -> "The file is damaged" to "The downloaded file isn't a working app. Delete it and download again."
+        has("Shizuku") -> "Shizuku isn't ready" to "The silent install needs Shizuku running and allowed. Open Shizuku, start it, then try again."
+        else -> "$name could not be installed" to (Regex("INSTALL_[A-Z_]+").find(m)?.value?.let { "Android said: $it" } ?: m.ifBlank { "Android did not say why." }).take(200)
+    }
 }
 // endregion
 
@@ -90,24 +140,25 @@ private class Preset(val id: String, val label: String, val icon: String, val ac
 private class Normed(val src: AppItem) {
     private val a get() = src
     val cat = norm(a.category); val tags = a.tags.map(::norm)
-    val hay by lazy { norm((listOf(a.name, a.description, a.author, a.category) + a.tags).joinToString(" ")) }
+    /** Padded with spaces so keywords match whole words: "track" must not pull in every "tracker". */
+    val hay by lazy { " " + norm((listOf(a.name, a.description, a.author, a.category) + a.tags).joinToString(" ")) + " " }
 }
 
 private val PRESETS = listOf(
-    Preset("music", "Music", "fa-headphones", "#f472b6", listOf("#ec4899", "#8b5cf6"), emptyList(), listOf("music", "audio", "song", "songs", "album", "albums", "listen", "radio", "deezer", "track", "tracks", "scrobble")),
+    Preset("music", "Music", "fa-headphones", "#f472b6", listOf("#ec4899", "#8b5cf6"), emptyList(), listOf("music", "song", "songs", "album", "albums", "listen", "radio", "deezer", "scrobble")),
     Preset("movies", "Movies", "fa-film", "#fb923c", listOf("#f97316", "#ef4444"), emptyList(), listOf("movie", "movies", "video", "videos", "watch", "stream", "streaming", "netflix", "prime video", "hulu", "youtube")),
     Preset("anime", "Anime", "fa-dragon", "#a78bfa", listOf("#8b5cf6", "#ec4899"), emptyList(), listOf("anime", "manga", "anilist", "komikku")),
-    Preset("health", "Health", "fa-heart-pulse", "#34d399", listOf("#10b981", "#14b8a6"), emptyList(), listOf("health", "fitness", "workout", "sleep", "step", "steps", "habit", "meditation", "wellness")),
+    Preset("health", "Health", "fa-heart-pulse", "#34d399", listOf("#10b981", "#14b8a6"), emptyList(), listOf("health", "fitness", "workout", "habit", "meditation", "wellness")),
     Preset("privacy", "Privacy", "fa-user-shield", "#2dd4bf", listOf("#14b8a6", "#06b6d4"), listOf("Privacy"), listOf("privacy", "private", "security", "secure", "encrypt", "encrypted", "authenticator", "2fa", "totp", "backup")),
     Preset("social", "Social", "fa-comments", "#60a5fa", listOf("#3b82f6", "#6366f1"), listOf("Social"), listOf("social", "community", "chat", "friends", "messaging", "anilist")),
     Preset("developer", "Developer", "fa-code", "#f59e0b", listOf("#f59e0b", "#f97316"), listOf("Development"), listOf("developer", "development", "code", "coding", "ide", "studio", "terminal", "debug")),
-    Preset("reading", "Reading", "fa-book-open", "#22c55e", listOf("#22c55e", "#84cc16"), emptyList(), listOf("reader", "reading", "read", "book", "books", "comic", "manga", "novel")),
+    Preset("reading", "Reading", "fa-book-open", "#22c55e", listOf("#22c55e", "#84cc16"), emptyList(), listOf("reader", "reading", "book", "books", "comic", "manga", "novel")),
     Preset("productivity", "Productivity", "fa-briefcase", "#06b6d4", listOf("#06b6d4", "#3b82f6"), emptyList(), listOf("productivity", "workflow", "organize", "organise", "notes", "tasks", "todo", "calendar")),
     Preset("utilities", "Utilities", "fa-toolbox", "#94a3b8", listOf("#475569", "#0f172a"), listOf("Utility", "Utilities"), listOf("utility", "tools", "tool", "wallpaper", "download", "manager", "launcher", "offline")),
 )
 
 private fun findPreset(label: String) = norm(label).let { l -> PRESETS.firstOrNull { l in it.names } }
-private fun matches(n: Normed, p: Preset) = n.cat in p.raw || n.tags.any { it in p.names } || n.hay.let { h -> p.keys.any { it in h } }
+private fun matches(n: Normed, p: Preset) = n.cat in p.raw || n.tags.any { it in p.names } || n.hay.let { h -> p.keys.any { " $it " in h } }
 
 private val normCache = java.util.concurrent.ConcurrentHashMap<String, Normed>()
 private fun normed(a: AppItem) = normCache[a.id]?.takeIf { it.src === a } ?: Normed(a).also { normCache[a.id] = it }
@@ -377,10 +428,13 @@ fun buildMyAppsRows(apps: List<AppItem>, s: Settings, d: DataState, updateIds: S
     val saved = ready != null || cleanup != null || lib?.fileName != null
     val upd = a.id in updateIds; val dl = key != null; val now = inst != null
     if (lib == null && !now && !saved && !dl && !upd) return@mapNotNull null
+    if (!dl && ready == null && !isManaged(a.id, s)) return@mapNotNull null
     val status = when { dl -> "downloading"; ready != null -> "ready"; upd -> "update"; now || lib?.status == "installed" -> "installed"; else -> "downloaded" }
     MyAppRow(a, status, inst, s.lastRemoteVersions[a.id], ready, cleanup?.fileName, lib?.fileName, key, saved, upd, now, lib?.status,
         d.downloadProgress[a.id] ?: 0f, lib?.downloadedAt ?: cleanup?.timestamp ?: 0, lib?.installedAt)
 }.sortedByDescending { it.downloadedAt }
+
+fun myAppsFilterOrder(saved: List<String>) = saved.mapNotNull { n -> MyAppsFilter.entries.firstOrNull { it.name == n } }.distinct().let { it + (MyAppsFilter.entries - it.toSet()) }
 
 fun MyAppRow.matches(f: MyAppsFilter) = when (f) {
     MyAppsFilter.ALL -> true; MyAppsFilter.INSTALLED -> status == "installed" || hasUpdate

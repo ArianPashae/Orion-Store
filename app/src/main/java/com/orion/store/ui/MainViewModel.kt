@@ -631,7 +631,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // endregion
 
     // region install + verification
-    fun installFile(app: AppItem, file: String, regular: Boolean = false): kotlinx.coroutines.Job = viewModelScope.launch {
+    /** An install that can't or didn't work, explained in a dialog: [uninstall] offers removing the blocking app, [retry] installing anyway. */
+    data class InstallIssue(val app: AppItem, val title: String, val text: String, val uninstall: String? = null, val retry: String? = null)
+    var installIssue by mutableStateOf<InstallIssue?>(null)
+    /** Developer page: the author, and the app page it was opened from (it closes once another app opens). */
+    var devProfile by mutableStateOf<Pair<String, String?>?>(null)
+
+    fun installFile(app: AppItem, file: String, regular: Boolean = false, force: Boolean = false): kotlinx.coroutines.Job = viewModelScope.launch {
         val k = normalizePackageName(app.packageName)
         val meta = versionMetaFromFileName(app, file, s.streamOf(app.id))
         // Direct install runs as the shell user (no 24-hour wait, no "unknown apps" permission). When adbd is unreachable the
@@ -649,6 +655,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ctx.startActivity(tracker.installSettingsIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return@launch
             }
         } catch (e: Exception) { error("Permission check failed. Cannot install."); return@launch }
+        // Every route (installer, Shizuku, root, adb) fails the same way on a signer clash, so say why before trying
+        if (!force) withContext(Dispatchers.IO) { runCatching { tracker.clash(tracker.resolve(file)) }.getOrNull() }?.let { (pkg, c) ->
+            val (t, x) = clashText(c, app.name); haptic(H.WARNING)
+            installIssue = InstallIssue(app, t, x, pkg.takeIf { c == Clash.INSTALLED }, file); return@launch
+        }
         haptic(H.HEAVY); installingId = app.id
         if (k.isNotEmpty()) expectations[k] = InstallExpectation(app.id, meta.first)
         if (meta.second.isNotEmpty()) set { it.copy(appStreams = it.appStreams + (app.id to meta.second)) }
@@ -666,14 +677,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val msg = e.message ?: e.toString()
             if (!direct && !shizuku && ("INSTALL_CANCELED" in msg || "INSTALL_FAILED" in msg) && "INSTALL_FAILED_UPDATE_INCOMPATIBLE" !in msg && "INSTALL_PARSE_FAILED" !in msg) { beginVerify(app); return@launch }
             installingId = null; scanningId = null; expectations -= k
-            when {
-                "CORRUPT" in msg || "PARSE_ERROR" in msg -> { error("File corrupted. Deleting..."); deleteReadyFile(app, file) }
-                "package appears to be invalid" in msg || "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in msg || "INSTALL_PARSE_FAILED" in msg ->
-                    error("Update failed: installed app is not compatible with this package. Reinstall may be required.")
-                direct -> error("Direct install failed: $msg")
-                shizuku || "Shizuku" in msg -> error("${if (s.rootMode) "Root" else "Shizuku"} install failed: $msg")
-                else -> error("Installation failed.")
-            }
+            if ("CORRUPT" in msg || "PARSE_ERROR" in msg) deleteReadyFile(app, file)
+            val (t, x) = installFailureText(msg, app.name); haptic(H.ERROR)
+            val signer = listOf("UPDATE_INCOMPATIBLE", "signatures do not match").any { it in msg }
+            installIssue = InstallIssue(app, t, x, (s.resolvedPackageNames[app.id] ?: app.packageName)?.takeIf { signer && it.isNotBlank() })
         }
     }
 
@@ -712,20 +719,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             Triple(groups, cand, when { groups.isEmpty() -> emptyMap(); installed != null -> all.associateWith { installed[it] ?: PkgInfo(false) }; else -> tracker.appInfos(all) })
         }
         if (groups.isEmpty()) return emptyMap()
+        val src = withContext(Dispatchers.IO) { cand.values.flatten().filter { info[it]?.installed == true }.associateWith(tracker::installerOf) }
         val ver = st.installedVersions.toMutableMap(); val res = st.resolvedPackageNames.toMutableMap(); val own = st.packageOwners.toMutableMap()
+        val from = st.installSources.toMutableMap()
         val stale = mutableSetOf<String>(); val out = mutableMapOf<String, Pair<Boolean, String>>()
         groups.forEach { (k, g) ->
             val hit = cand.getValue(k).firstOrNull { info[it]?.installed == true }; val v = hit?.let { info.getValue(it).version }.orEmpty()
             val owner = hit?.let { resolveOwnedAppId(g, k, v, st, expectations[k]) }
             if (hit == null || owner == null) {
                 // A pending install keeps the package its APK named, so a sync while the installer is open does not forget it
-                own -= k; g.forEach { ver -= it.id; if (expectations[k]?.appId != it.id) res -= it.id; out[it.id] = false to ""; if (hit == null && st.lastRemoteVersions[it.id] != null) stale += it.id }
+                own -= k; g.forEach { ver -= it.id; from -= it.id; if (expectations[k]?.appId != it.id) res -= it.id; out[it.id] = false to ""; if (hit == null && st.lastRemoteVersions[it.id] != null) stale += it.id }
             } else {
                 own[k] = owner
-                g.forEach { if (it.id == owner) { ver[it.id] = v; res[it.id] = hit; out[it.id] = true to v } else { ver -= it.id; res -= it.id; out[it.id] = false to "" } }
+                g.forEach { if (it.id == owner) { ver[it.id] = v; res[it.id] = hit; from[it.id] = src[hit].orEmpty(); out[it.id] = true to v } else { ver -= it.id; res -= it.id; from -= it.id; out[it.id] = false to "" } }
             }
         }
-        set { it.copy(installedVersions = ver, resolvedPackageNames = res, packageOwners = own, lastRemoteVersions = it.lastRemoteVersions - stale) }
+        set { it.copy(installedVersions = ver, resolvedPackageNames = res, packageOwners = own, installSources = from, lastRemoteVersions = it.lastRemoteVersions - stale) }
         return out
     }
 

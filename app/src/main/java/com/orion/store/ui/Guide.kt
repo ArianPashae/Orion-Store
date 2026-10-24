@@ -77,6 +77,8 @@ private val CHAPTERS = listOf(
         Feature(Sym.Policy, "VirusTotal scan", "Check a download, an installed APK or the release file against 70+ antivirus engines with your own free key."),
         Feature(Sym.Code, "Source and safety", "Jump to the source code, the official releases page or the developer's site in one tap."),
         Feature(Sym.NotificationsOff, "Ignore updates", "Hide an update for a week, until the next version, or for good. Ignored updates wait in My Apps with an Unignore button."),
+        Feature(Sym.VisibilityOff, "Don't manage an app", "Keep an app you update elsewhere out of My Apps and updates from its ⋮ menu, or skip every app from other stores in Settings. Bring them back under Not managed."),
+        Feature(Sym.Person, "Developer page", "Tap the developer's name on an app page to see every app they have in Orion."),
         Feature(Sym.SaveAlt, "Export and redownload", "Save the APK to your Downloads folder, fetch it again, or delete a saved copy to free space."),
         Feature(Sym.Share, "Share links and badges", "Copy a deep link that opens the app straight in Orion, a web link, or a Markdown or HTML badge for your README."),
         Feature(Sym.EditNote, "Request a change", "Spotted a wrong icon, dead link or old description? Send a correction for exactly that field."),
@@ -123,6 +125,7 @@ private val CHAPTERS = listOf(
         Feature(Sym.OpenInFull, "Dock size", "Scale the dock between compact and large with a live preview. It starts compact.", settings("visuals")),
         Feature(Sym.TouchApp, "Haptic feedback", "Tactile ticks on taps, toggles and successes.", settings("visuals")),
         Feature(Sym.Speed, "Smooth motion", "Prefer the highest refresh rate your screen offers.", settings("visuals")),
+        Feature(Sym.Bolt, "Performance mode", "Lite keeps older phones smooth by stopping decorative motion; Boost keeps more images ready on fast ones. Auto picks for you.", settings("visuals")),
         Feature(Sym.MotionPhotosOff, "Disable animations", "Every transition snaps instantly.", settings("visuals")),
         Feature(Sym.ViewAgenda, "Hide tabs", "Hide the Apps, PC, TV or My Apps tab. The Dev tab always stays.", settings("interface")),
         Feature(Sym.Tv, "Android TV (Beta)", "Orion runs on Android TV: it opens on the TV catalog, installs TV apps right on the TV, and every card lights up as your remote moves. Tap the TV Beta pill to report a bug."),
@@ -244,7 +247,7 @@ private val HERO_SHAPES = listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Sun
 
 @Composable
 private fun GuideHero(total: Int) {
-    val cs = MaterialTheme.colorScheme; val still = LocalS.current.disableAnimations
+    val cs = MaterialTheme.colorScheme; val still = LocalS.current.calm
     var shape by remember { mutableIntStateOf(0) }
     LaunchedEffect(still) { if (!still) while (true) { delay(2600); shape++ } }
     Box(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(cs.primaryContainer, cs.surface)))) {
@@ -315,7 +318,7 @@ private fun FeatureRow(c: Chapter, f: Feature, i: Int, n: Int, onGo: () -> Unit)
 /** A MaterialShape turning slowly in place; holds still when animations are off. */
 @Composable
 private fun Turning(shape: RoundedPolygon, color: Color, size: Dp, modifier: Modifier = Modifier, periodMs: Int = 20_000) {
-    val still = LocalS.current.disableAnimations
+    val still = LocalS.current.calm
     val r by rememberInfiniteTransition(label = "turn").animateFloat(0f, if (still) 0f else 360f, infiniteRepeatable(tween(periodMs, easing = LinearEasing)), label = "r")
     Box(modifier.size(size).graphicsLayer { rotationZ = r }.clip(shape.toShape()).background(color))
 }

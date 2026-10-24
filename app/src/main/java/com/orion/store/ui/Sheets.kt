@@ -109,7 +109,7 @@ fun AppPickerList(pool: List<AppItem>, platform: String, modifier: Modifier = Mo
             OutlinedTextField(q, { q = it; limit = 20 }, Modifier.fillMaxWidth(), placeholder = { Text("Search $platform apps...") }, singleLine = true, shape = RoundedCornerShape(28.dp),
                 leadingIcon = { Icon(Sym.Search, null) },
                 trailingIcon = { if (q.isNotEmpty()) IconButton({ q = ""; limit = 20 }) { Icon(Sym.Close, "Clear search") } })
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().bleed(16.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 (listOf("All" to pool.size) + cats.toList()).forEach { (k, n) ->
                     FilterChip(cat == k, { cat = k; limit = 20 }, { Text("$k ($n)") }, leadingIcon = if (cat == k) ({ Icon(Sym.Check, null, Modifier.size(18.dp)) }) else null)
                 }
@@ -714,7 +714,7 @@ private val WELCOME_POINTS = listOf(
 @Composable
 fun WelcomeSheet(vm: MainViewModel) = OrionSheet(vm::finishWelcome) {
     val cs = MaterialTheme.colorScheme; val ty = MaterialTheme.typography; val close = LocalSheetClose.current
-    val still = LocalS.current.disableAnimations
+    val still = LocalS.current.calm
     var k by remember { mutableIntStateOf(0) }
     LaunchedEffect(still) { delay(250); k = 1; while (!still) { delay(2200); k++ } }
     val pulse by rememberInfiniteTransition(label = "re").animateFloat(1f, if (still) 1f else 1.08f,
@@ -746,5 +746,26 @@ fun WelcomeSheet(vm: MainViewModel) = OrionSheet(vm::finishWelcome) {
             }
         }
         CtaButton("Let's go", close, Modifier.padding(top = 20.dp).reveal(8), icon = Sym.RocketLaunch)
+    }
+}
+
+/** Every catalog app by one developer: a shape avatar, the name, the count, then the apps. */
+@Composable
+fun DevSheet(vm: MainViewModel, dev: String, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
+    val d = LocalD.current; val cs = MaterialTheme.colorScheme; val ty = MaterialTheme.typography
+    val apps = remember(d.apps, d.importedApps, dev) {
+        (d.apps + d.importedApps).filter { it.author.trim().equals(dev.trim(), true) }.distinctBy { it.id }.sortedWith(compareBy(collator) { it.name })
+    }
+    LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 32.dp)) {
+        item("dev") {
+            Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Sunny), 0, 88.dp, cs.primaryContainer) {
+                    Text(dev.trim().take(1).uppercase(), style = ty.displaySmallEmphasized, color = cs.onPrimaryContainer)
+                }
+                Text(dev, Modifier.padding(top = 14.dp, start = 24.dp, end = 24.dp), style = ty.headlineSmallEmphasized, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${apps.size} app${if (apps.size == 1) "" else "s"}", style = ty.labelLarge, color = cs.onSurfaceVariant)
+            }
+        }
+        itemsIndexed(apps, key = { _, a -> a.id }) { i, a -> AppRow(vm, a, i, apps.size, Modifier.animateItem()) }
     }
 }

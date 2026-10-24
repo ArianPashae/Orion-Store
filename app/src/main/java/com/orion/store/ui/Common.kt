@@ -12,6 +12,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -406,7 +410,7 @@ fun TonalIcon(icon: ImageVector, c: Color) {
 /** Device tilt from the gravity sensor, low-pass filtered, in roughly -1..1 per axis. Read it inside graphicsLayer/draw lambdas so it only redraws. */
 @Composable
 fun rememberTilt(): State<Offset> {
-    val ctx = LocalContext.current; val off = LocalS.current.disableAnimations
+    val ctx = LocalContext.current; val off = LocalS.current.calm
     val tilt = remember { mutableStateOf(Offset.Zero) }
     DisposableEffect(off) {
         val sm = ctx.getSystemService(android.hardware.SensorManager::class.java)
@@ -467,3 +471,22 @@ fun ThemeRevealHost(content: @Composable () -> Unit) {
 
 /** Center of this element in root coordinates, for reveal origins. */
 fun Modifier.trackCenter(into: MutableState<Offset>) = onGloballyPositioned { into.value = it.boundsInRoot().center }
+
+/** TV: a full-screen overlay pulls D-pad focus in and keeps it. Otherwise the remote keeps moving through the screen underneath,
+ *  so the overlay never scrolls. */
+@Composable
+fun Modifier.trapFocus(): Modifier {
+    if (!Device.isTv) return this
+    val fr = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { androidx.compose.runtime.withFrameNanos { }; runCatching { fr.requestFocus() } }
+    return focusRequester(fr).focusProperties { onExit = { cancelFocusChange() } }.focusGroup()
+}
+
+/** Lets a horizontal scroller inside a column padded by [h] run to the screen edges. Follow it with horizontalScroll and then
+ *  padding(horizontal = h), so the first item still lines up with the column. */
+fun Modifier.bleed(h: androidx.compose.ui.unit.Dp) = layout { m, c ->
+    val px = h.roundToPx()
+    val wide = if (c.hasBoundedWidth) c.copy(minWidth = c.minWidth + 2 * px, maxWidth = c.maxWidth + 2 * px) else c
+    val p = m.measure(wide)
+    layout(if (c.hasBoundedWidth) p.width - 2 * px else p.width, p.height) { p.place(if (c.hasBoundedWidth) -px else 0, 0) }
+}

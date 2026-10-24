@@ -460,7 +460,7 @@ fun ProfileStatsSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onD
 private fun PilotCard(s: Settings, name: String, avatarUrl: String, onAvatar: () -> Unit) {
     val cs = MaterialTheme.colorScheme; val tilt = rememberTilt(); val scope = rememberCoroutineScope()
     val drag = remember { Animatable(Offset.Zero, Offset.VectorConverter) }; val back = MaterialTheme.motionScheme.slowSpatialSpec<Offset>()
-    val still = s.disableAnimations
+    val still = s.calm
     val foil by rememberInfiniteTransition(label = "foil").animateFloat(0f, if (still) 0f else 1f, infiniteRepeatable(tween(7000, easing = LinearEasing)), label = "f")
     val xp = Xp.total(s, LocalD.current.appLibrary.size); val level = Xp.level(xp)
     val target = ((xp - Xp.start(level)).toFloat() / Xp.step(level)).coerceIn(0f, 1f)
@@ -834,7 +834,7 @@ fun CustomBundleSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onD
                         }
                     }
                     Text("Color", Modifier.padding(top = 4.dp), style = ty.titleMediumEmphasized)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth().bleed(16.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         COLOR_CHOICES.forEachIndexed { i, g ->
                             val sw = Regex("#[0-9a-fA-F]{6}").findAll(g).map { hex(it.value) }.toList().let { if (it.size == 1) it + it else it }
                             val on = color == i
@@ -1103,7 +1103,7 @@ fun SubmissionSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDis
                 }
                 var viewing by remember { mutableStateOf<Int?>(null) }
                 viewing?.let { Lightbox(f.shots, it) { viewing = null } }
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().bleed(16.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     f.shots.forEachIndexed { i, u ->
                         Box(Modifier.size(84.dp, 150.dp).clip(RoundedCornerShape(16.dp)).background(cs.surfaceContainerHighest).clickable(onClickLabel = "View screenshot ${i + 1}") { viewing = i }) {
                             AsyncImage(u, "Screenshot ${i + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)

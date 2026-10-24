@@ -100,7 +100,7 @@ private fun Home(vm: MainViewModel) {
     }
     Row(Modifier.fillMaxSize()) {
         if (wide) CompositionLocalProvider(LocalDensity provides navDensity) {
-            NavigationRail(containerColor = MaterialTheme.colorScheme.surfaceContainer, header = {
+            NavigationRail(containerColor = if (s.isOled) Color.Black else MaterialTheme.colorScheme.surfaceContainer, header = {
                 Spacer(Modifier.height(12.dp))
                 if (s.aiButton) AiStarFace(vm, Modifier.padding(vertical = 8.dp))
             }) {
@@ -154,7 +154,7 @@ private fun Home(vm: MainViewModel) {
  *  of the screen so it survives rotation. The rail gets the same star, fixed in place. */
 @Composable
 private fun AiStarFace(vm: MainViewModel, modifier: Modifier = Modifier, lifted: Boolean = false) {
-    val cs = MaterialTheme.colorScheme; val still = LocalS.current.disableAnimations
+    val cs = MaterialTheme.colorScheme; val still = LocalS.current.calm
     val spin by rememberInfiniteTransition(label = "star").animateFloat(0f, if (still) 0f else 360f, infiniteRepeatable(tween(14_000, easing = androidx.compose.animation.core.LinearEasing)), label = "spin")
     val k by animateFloatAsState(if (lifted) 1.18f else 1f, MaterialTheme.motionScheme.fastSpatialSpec(), label = "lift")
     val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
@@ -186,9 +186,13 @@ private fun BoxScope.AiStar(vm: MainViewModel) = BoxWithConstraints(Modifier.mat
 @Composable
 private fun FloatingNav(vm: MainViewModel, items: List<NavItem>, updates: Int, shown: Boolean, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme; val s = LocalS.current
-    val drop by animateDpAsState(if (shown) 0.dp else 120.dp, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "drop")
-    Surface(modifier.navigationBarsPadding().padding(bottom = 12.dp).graphicsLayer { translationY = drop.toPx() }, shape = Pill,
-        color = cs.surfaceContainerHigh.copy(alpha = if (s.glassEffect) .95f else 1f), shadowElevation = 8.dp) {
+    val drop by animateFloatAsState(if (shown) 0f else 1f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "drop")
+    // Slides by its own height plus everything below it (system bar, margin, shadow), so no sliver stays on screen at any dock size or inset
+    val below = WindowInsets.navigationBars.getBottom(LocalDensity.current)
+    // OLED: a pitch-black dock, set apart from the black page by a hairline outline instead of a lighter fill
+    Surface(modifier.navigationBarsPadding().padding(bottom = 12.dp).graphicsLayer { translationY = drop * (size.height + below + 32.dp.toPx()) }, shape = Pill,
+        color = if (s.isOled) Color.Black else cs.surfaceContainerHigh.copy(alpha = if (s.glassEffect) .95f else 1f), shadowElevation = 8.dp,
+        border = if (s.isOled) androidx.compose.foundation.BorderStroke(1.dp, cs.outline.copy(alpha = .5f)) else null) {
         Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
             items.forEach { n ->
                 val on = vm.tab == n.tab
@@ -354,20 +358,20 @@ private fun Overlays(vm: MainViewModel) {
     val sp = MaterialTheme.motionScheme.defaultSpatialSpec<Float>(); val fx = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     // Under the app page, so an app opened from the chat lands on top and backing out returns to the conversation
     AnimatedVisibility(Overlay.AI in vm.overlays, enter = slideInVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) { it / 5 } + fadeIn(), exit = slideOutVertically { it / 5 } + fadeOut()) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { AiScreen(vm) { vm.close(Overlay.AI) } }
+        Surface(Modifier.fillMaxSize().trapFocus(), color = MaterialTheme.colorScheme.surface) { AiScreen(vm) { vm.close(Overlay.AI) } }
     }
     AnimatedVisibility(vm.selectedApp != null, enter = fadeIn(fx) + scaleIn(sp, .92f), exit = fadeOut(fx) + scaleOut(targetScale = .94f)) {
         val r by transition.animateDp(label = "r") { if (it == EnterExitState.Visible) 0.dp else 48.dp }
         BackHandler { vm.selectedApp = null }
-        Surface(Modifier.fillMaxSize().graphicsLayer { clip = true; shape = RoundedCornerShape(r) }, color = MaterialTheme.colorScheme.surface) {
+        Surface(Modifier.fillMaxSize().trapFocus().graphicsLayer { clip = true; shape = RoundedCornerShape(r) }, color = MaterialTheme.colorScheme.surface) {
             lastApp?.let { DetailScreen(vm, it) }
         }
     }
     AnimatedVisibility(Overlay.SETTINGS in vm.overlays, enter = slideInHorizontally { it / 3 } + fadeIn(), exit = slideOutHorizontally { it / 3 } + fadeOut()) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { SettingsScreen(vm) }
+        Surface(Modifier.fillMaxSize().trapFocus(), color = MaterialTheme.colorScheme.surface) { SettingsScreen(vm) }
     }
     AnimatedVisibility(Overlay.GUIDE in vm.overlays, enter = slideInVertically { it / 4 } + fadeIn(), exit = slideOutVertically { it / 4 } + fadeOut()) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) { KnowOrionScreen(vm) { vm.close(Overlay.GUIDE) } }
+        Surface(Modifier.fillMaxSize().trapFocus(), color = MaterialTheme.colorScheme.surface) { KnowOrionScreen(vm) { vm.close(Overlay.GUIDE) } }
     }
     fun o(x: Overlay) = x in vm.overlays
     if (o(Overlay.RELEASE_NOTES)) ReleaseNotesSheet(vm) { vm.close(Overlay.RELEASE_NOTES) }
@@ -385,6 +389,17 @@ private fun Overlays(vm: MainViewModel) {
     if (vm.changeRequest) vm.selectedApp?.let { ChangeRequestSheet(vm, it) { vm.changeRequest = false } }
     vm.autoReport?.let { log -> AutoReportDialog(vm, log) }
     if (vm.guidePrompt) GuidePromptDialog(vm)
+    vm.devProfile?.let { (dev, from) -> if (vm.selectedApp?.id == from) DevSheet(vm, dev) { vm.devProfile = null } else SideEffect { vm.devProfile = null } }
+    vm.installIssue?.let { i ->
+        fun close() { vm.installIssue = null }
+        AlertDialog(::close, icon = { Icon(Sym.ErrorOutline, null) }, title = { Text(i.title) },
+            text = { Text(i.text, Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) },
+            confirmButton = {
+                if (i.uninstall != null) TextButton({ close(); vm.tracker.uninstall(i.uninstall) }) { Text("Uninstall current") }
+                else TextButton(::close) { Text("Got it") }
+            },
+            dismissButton = { i.retry?.let { f -> TextButton({ close(); vm.installFile(i.app, f, force = true) }) { Text("Try anyway") } } })
+    }
 }
 
 /** One-time hello for 2.2.0: points everyone at Know Orion. */

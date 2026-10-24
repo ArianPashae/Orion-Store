@@ -103,7 +103,11 @@ class AiSession {
                 // This message's local matches, plus what was already suggested so follow-ups like "something lighter" still have it
                 val earlier = history.flatMap { m -> m.apps.map { catalog.indexOf(it) } }.filter { it >= 0 }.takeLast(5)
                 val ids = (OrionAi.matches(catalog, q, if (local) 8 else 20) + earlier).distinct()
-                val turns = history.map { OrionAi.Turn(it.user, it.raw) } + OrionAi.Turn(true, q + "\n\n" + OrionAi.describe(catalog, ids, if (local) 60 else 110) +
+                // What is on this phone, so it can skip installed apps and answer "do I have updates" style questions
+                val up = vm.updates.map { it.id }.toSet()
+                val mine = catalog.withIndex().filter { it.value.id in s.installedVersions }.take(if (local) 12 else 60)
+                    .joinToString("; ") { (i, a) -> "$i ${a.name}" + if (a.id in up) " (update ready)" else "" }.ifEmpty { "none" }
+                val turns = history.map { OrionAi.Turn(it.user, it.raw) } + OrionAi.Turn(true, q + "\n\nOn this phone: $mine\n" + OrionAi.describe(catalog, ids, if (local) 60 else 110) +
                     if (local) OrionAi.guideMatches(GUIDE_TEXT, q, 3).joinToString("") { "\nOrion guide g$it ${GUIDE_TEXT[it].first}: ${GUIDE_TEXT[it].second}" } else "")
                 val show: (String) -> Unit = { t -> reply.text = OrionAi.parse(t).reply }
                 val raw = if (local) LocalLlm.chat(vm.getApplication(), LocalLlm.model(s.aiLocalModel) ?: throw AiError("Pick an on-device model in AI settings."), system, turns, show)
@@ -170,7 +174,7 @@ private val AiTop @Composable get() = WindowInsets.statusBarsIgnoringVisibility.
 /** A shape that keeps morphing through the expressive set; [fast] while Orion AI is answering. Holds still with animations off. */
 @Composable
 private fun AiOrb(size: androidx.compose.ui.unit.Dp, fast: Boolean, icon: ImageVector = Sym.AutoAwesome) {
-    val cs = MaterialTheme.colorScheme; val still = LocalS.current.disableAnimations
+    val cs = MaterialTheme.colorScheme; val still = LocalS.current.calm
     var i by remember { mutableIntStateOf(0) }
     LaunchedEffect(fast, still) { if (!still) while (true) { delay(if (fast) 650 else 2400); i++ } }
     MorphBlob(AI_SHAPES, i, size, cs.primaryContainer) { Icon(icon, null, Modifier.size(size * .5f), tint = cs.onPrimaryContainer) }

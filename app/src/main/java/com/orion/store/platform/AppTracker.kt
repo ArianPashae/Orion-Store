@@ -21,6 +21,7 @@ import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
+import com.orion.store.data.Clash
 import com.orion.store.data.Net
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -77,6 +78,13 @@ class AppTracker(private val ctx: Context) {
         val p = pm.getPackageInfo(pkg, 0); PkgInfo(true, p.versionName.orEmpty(), PackageInfoCompat.getLongVersionCode(p))
     } catch (_: PackageManager.NameNotFoundException) { PkgInfo(false) }
 
+    @Suppress("DEPRECATION")
+    fun installerOf(pkg: String): String = runCatching {
+        if (Build.VERSION.SDK_INT >= 30) pm.getInstallSourceInfo(pkg).installingPackageName else pm.getInstallerPackageName(pkg)
+    }.getOrNull().orEmpty()
+
+    fun labelOf(pkg: String): String = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+
     /** Big lookups read one package list instead of a getPackageInfo binder call (plus a NameNotFound exception) per candidate:
      *  a catalog sync probes about 12 package-name variants per app, which used to be ~12k IPCs on every boot. */
     fun appInfos(pkgs: Collection<String>): Map<String, PkgInfo> {
@@ -122,6 +130,24 @@ class AppTracker(private val ctx: Context) {
         h[0] == 0x50.toByte() && h[1] == 0x4B.toByte() && h[2] == 3.toByte() && h[3] == 4.toByte() &&
             !pm.getPackageArchiveInfo(f.absolutePath, 0)?.packageName.isNullOrEmpty()
     }.getOrDefault(false)
+
+    @Suppress("DEPRECATION")
+    private fun signers(pi: PackageInfo): Set<String> = if (Build.VERSION.SDK_INT >= 28)
+        pi.signingInfo?.let { if (it.hasMultipleSigners()) it.apkContentsSigners else it.signingCertificateHistory }.orEmpty().map { it.toCharsString() }.toSet()
+    else pi.signatures.orEmpty().map { it.toCharsString() }.toSet()
+
+    /** The APK's package and why Android will refuse it, or null when nothing on the phone (any profile, kept data, system image) has a different signer.
+     *  Signer histories overlapping means a key rotation, which Android accepts. */
+    @Suppress("DEPRECATION")
+    fun clash(f: File): Pair<String, Clash>? = runCatching {
+        val flag = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val apk = pm.getPackageArchiveInfo(f.absolutePath, flag) ?: return null
+        val cur = runCatching { pm.getPackageInfo(apk.packageName, flag or PackageManager.MATCH_UNINSTALLED_PACKAGES) }.getOrNull() ?: return null
+        val a = signers(apk); val b = signers(cur)
+        if (a.isEmpty() || b.isEmpty() || a.any { it in b }) return null
+        val ai = cur.applicationInfo
+        apk.packageName to when { ai != null && isSys(ai) -> Clash.SYSTEM; ai != null && ai.flags and ApplicationInfo.FLAG_INSTALLED == 0 -> Clash.HIDDEN; else -> Clash.INSTALLED }
+    }.getOrNull()
 
     fun archivePackage(f: File): String? = runCatching { pm.getPackageArchiveInfo(f.absolutePath, 0)?.packageName }.getOrNull()
 
@@ -210,7 +236,9 @@ class AppTracker(private val ctx: Context) {
         val owner = if (root) " -i ${ctx.packageName}" + if (lock && Build.VERSION.SDK_INT >= 34) " --update-ownership" else "" else ""
         fun attempt(flags: String) = sh("pm install -r --restrict-permissions$flags -S ${f.length()}").let { p ->
             p.outputStream.use { o -> f.inputStream().use { it.copyTo(o) } }
-            p.waitFor() to p.err()
+            // pm prints "Failure [INSTALL_FAILED_...]" on stdout, the part that says why
+            val out = p.inputStream.bufferedReader().readText(); val code = p.waitFor()
+            (if (code == 0 && "Failure" in out) 1 else code) to "${out.trim()} ${p.err()}".trim()
         }
         var (code, err) = attempt(owner)
         // Some ROMs ship a pm without --update-ownership: install anyway rather than fail the update
@@ -240,21 +268,27 @@ class AppTracker(private val ctx: Context) {
         requireShizuku(); val p = sh("pm trim-caches 1024G"); if (p.waitFor() != 0) throw NativeError("Trim failed: ${p.err()}")
     }
 
-    // Sentinel
+    /** Every installed package with its info. One list call can fail on OEM builds with many apps (oversized binder reply),
+     *  so that falls back to the light app list plus one lookup per package. */
+    @Suppress("DEPRECATION")
+    private fun packages(flags: Int): List<PackageInfo> = runCatching { pm.getInstalledPackages(flags) }.getOrNull()?.takeIf { it.isNotEmpty() }
+        ?: pm.getInstalledApplications(flags and PackageManager.MATCH_UNINSTALLED_PACKAGES).mapNotNull { runCatching { pm.getPackageInfo(it.packageName, flags) }.getOrNull() }
+
+    /** Every installed app with its granted dangerous permissions (empty when none): Perms shows the flagged ones, Surgeon all of them. */
     suspend fun riskyApps(): List<RiskyApp> = withContext(Dispatchers.IO) {
-        pm.getInstalledPackages(PackageManager.GET_PERMISSIONS).mapNotNull { pi ->
-            val req = pi.requestedPermissions ?: return@mapNotNull null; val fl = pi.requestedPermissionsFlags ?: return@mapNotNull null
+        packages(PackageManager.GET_PERMISSIONS).mapNotNull { pi ->
             val ai = pi.applicationInfo ?: return@mapNotNull null
-            val perms = req.indices.filter { fl[it] and PackageInfo.REQUESTED_PERMISSION_GRANTED != 0 && req[it] in DANGEROUS }.map { req[it] }
-            perms.takeIf { it.isNotEmpty() }?.let { RiskyApp(ai.loadLabel(pm).toString(), pi.packageName, isSys(ai), it) }
+            val req = pi.requestedPermissions.orEmpty(); val fl = pi.requestedPermissionsFlags ?: IntArray(0)
+            val perms = req.indices.filter { it < fl.size && fl[it] and PackageInfo.REQUESTED_PERMISSION_GRANTED != 0 && req[it] in DANGEROUS }.map { req[it] }
+            RiskyApp(runCatching { ai.loadLabel(pm).toString() }.getOrDefault(pi.packageName), pi.packageName, isSys(ai), perms)
         }
     }
 
+    /** Every app on the phone, removed-for-this-user ones included, for Debloat. */
     @Suppress("DEPRECATION")
     suspend fun systemApps(): List<SysApp> = withContext(Dispatchers.IO) {
-        pm.getInstalledPackages(PackageManager.GET_META_DATA or PackageManager.MATCH_UNINSTALLED_PACKAGES).filter { it.packageName != ctx.packageName }.mapNotNull { p ->
-            val ai = p.applicationInfo ?: return@mapNotNull null
-            SysApp(p.packageName, runCatching { pm.getApplicationLabel(ai).toString() }.getOrDefault(p.packageName),
+        pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES).filter { it.packageName != ctx.packageName }.map { ai ->
+            SysApp(ai.packageName, runCatching { pm.getApplicationLabel(ai).toString() }.getOrDefault(ai.packageName),
                 ai.flags and ApplicationInfo.FLAG_INSTALLED != 0, ai.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0)
         }
     }
@@ -262,7 +296,9 @@ class AppTracker(private val ctx: Context) {
     suspend fun toggleSystemApp(pkg: String, enable: Boolean) = withContext(Dispatchers.IO) {
         requireShizuku()
         val p = sh(if (enable) "cmd package install-existing $pkg" else "pm uninstall -k --user 0 $pkg")
-        val exit = p.waitFor(); if (exit != 0) throw NativeError("Operation failed (Code $exit): ${p.err()}")
+        // pm reports "Failure [...]" on stdout, and some ROMs still exit 0
+        val out = p.inputStream.bufferedReader().readText(); val exit = p.waitFor()
+        if (exit != 0 || "Failure" in out) throw NativeError("Operation failed (Code $exit): ${out.trim()} ${p.err()}".trim())
     }
 
     suspend fun revokePermission(pkg: String, perm: String) = withContext(Dispatchers.IO) {

@@ -154,6 +154,13 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                         DropdownMenu(more, { more = false }, shape = RoundedCornerShape(20.dp)) {
                             DropdownMenuItem({ Text("Request app change") }, { more = false; vm.haptic(H.LIGHT); vm.changeRequest = true }, leadingIcon = { Icon(Sym.EditNote, null) })
                             DropdownMenuItem({ Text("Report an issue") }, { more = false; vm.haptic(H.LIGHT); report() }, leadingIcon = { Icon(Sym.Flag, null) })
+                            if (installed) {
+                                val managed = isManaged(app.id, s)
+                                DropdownMenuItem({ Text(if (managed) "Don't manage with Orion" else "Manage with Orion") }, {
+                                    more = false; vm.haptic(H.SUCCESS); vm.set { it.withManaged(app.id, !managed) }
+                                    vm.toast(if (managed) "${app.name} left My Apps and updates" else "${app.name} is back in My Apps", action = "Undo") { vm.set { it.withManaged(app.id, managed) } }
+                                }, leadingIcon = { Icon(if (managed) Sym.VisibilityOff else Sym.Visibility, null) })
+                            }
                             if (s.isDevUnlocked) DropdownMenuItem({ Text("Developer deep links") }, { more = false; vm.haptic(H.SELECTION); shareSheet = true }, leadingIcon = { Icon(Sym.Link, null) })
                         }
                     }
@@ -164,7 +171,8 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
         },
         bottomBar = {
             Surface(color = cs.surfaceContainer, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
-                Row(Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                // Capped and centered: on tablets and landscape the actions would otherwise span the whole screen
+                Row(Modifier.fillMaxWidth().navigationBarsPadding().wrapContentWidth().widthIn(max = 560.dp).padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     val h = Modifier.heightIn(min = ButtonDefaults.MediumContainerHeight)
                     val side = Modifier.size(ButtonDefaults.MediumContainerHeight)
                     val big = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight)
@@ -214,7 +222,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                                 DropdownMenu(ignoreMenu, { ignoreMenu = false }, shape = RoundedCornerShape(20.dp)) {
                                     Text("Ignore update", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
                                     DropdownMenuItem({ Text("Ignore for 1 week") }, { ignore("week") }, leadingIcon = { Icon(Sym.Schedule, null) })
-                                    DropdownMenuItem({ Text("Until next version") }, { ignore("version", app.latestVersion) }, leadingIcon = { Icon(Sym.SkipNext, null) })
+                                    DropdownMenuItem({ Text("Until next version") }, { ignore("version", preferredVersion(app, s.streamOf(app.id))) }, leadingIcon = { Icon(Sym.SkipNext, null) })
                                     DropdownMenuItem({ Text("Never show again") }, { ignore("never") }, leadingIcon = { Icon(Sym.Block, null) })
                                 }
                             }
@@ -235,7 +243,8 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                     Column(Modifier.weight(1f)) {
                         Text(app.name, style = MaterialTheme.typography.headlineSmallEmphasized, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(app.author, style = MaterialTheme.typography.titleSmall, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false))
+                            Text(app.author, style = MaterialTheme.typography.titleSmall, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, false).clip(Pill).clickable(enabled = app.author.isNotBlank()) { vm.haptic(H.LIGHT); vm.devProfile = app.author to app.id })
                             Spacer(Modifier.width(4.dp)); Icon(Sym.VerifiedFilled, "Verified", Modifier.size(16.dp), tint = cs.primary)
                         }
                         statusText(app)?.let { (t, c) -> Text(t, style = MaterialTheme.typography.labelLarge, color = c, modifier = Modifier.padding(top = 2.dp)) }

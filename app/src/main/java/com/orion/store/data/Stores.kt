@@ -66,6 +66,8 @@ import kotlin.math.max
     val installerPackage: String = "",
     val installerLabel: String = "",
     val disableAnimations: Boolean = false,
+    /** auto, lite, balanced or boost. Auto is Lite on low-end phones, Balanced elsewhere. */
+    val perfMode: String = "auto",
     val compactMode: Boolean = false,
     /** Classic rows show a two-line "About this app" preview that expands in place. */
     val showAppAbout: Boolean = false,
@@ -98,6 +100,13 @@ import kotlin.math.max
     val resolvedPackageNames: Map<String, String> = emptyMap(),
     val packageOwners: Map<String, String> = emptyMap(),
     val ignoredUpdates: Map<String, IgnoredUpdate> = emptyMap(),
+    /** Per-app manage choice (false = out of My Apps and updates); apps without one follow [skipOtherStores]. */
+    val appManage: Map<String, Boolean> = emptyMap(),
+    val skipOtherStores: Boolean = false,
+    /** Installer package of each installed catalog app, from the last package sync ("" = none recorded). */
+    val installSources: Map<String, String> = emptyMap(),
+    /** My Apps filter pill order (enum names); missing ones follow in default order. */
+    val myAppsFilters: List<String> = emptyList(),
     val hasSeenModernUITutorial: Boolean = false,
     val userProfile: UserProfile? = null,
     val customBundles: List<CustomBundle> = emptyList(),
@@ -130,6 +139,9 @@ import kotlin.math.max
     }
     fun withInstaller(pref: String, pkg: String = "", label: String = "") =
         copy(installerPreference = pref, installerPackage = if (pref == "package") pkg else "", installerLabel = if (pref == "package") label else "")
+    val perf get() = if (perfMode == "auto") (if (Device.lowEnd) "lite" else "balanced") else perfMode
+    /** Endless decorative motion (turning shapes, pulses, hero auto-advance, tilt) stops in Lite and with animations off. */
+    val calm get() = disableAnimations || perf == "lite"
     fun streamOf(id: String) = if (stableOnly) "Stable" else appStreams[id] ?: "Stable"
     fun hideInstaller(pkg: String) = if (pkg in hiddenInstallers) this else copy(hiddenInstallers = hiddenInstallers + pkg)
     fun incrementCoinFlipHint() = copy(coinFlipHintCount = minOf(3, coinFlipHintCount + 1))
@@ -153,6 +165,8 @@ import kotlin.math.max
     fun registerChangeRequest(now: Long) = copy(changeRequestCount = changeRequestCount + 1, submissionCount = submissionCount + 1, lastSubmissionTime = now)
     fun withSubmissionCount(c: Double) = copy(submissionCount = if (c.isFinite()) max(0.0, floor(c)).toInt() else 0)
     fun ignoreUpdate(id: String, type: String, version: String?, now: Long) = copy(ignoredUpdates = ignoredUpdates + (id to IgnoredUpdate(type, now, version)))
+    /** Stores an override only when it differs from what the store filter would decide. */
+    fun withManaged(id: String, on: Boolean) = copy(appManage = appManage - id).let { if (isManaged(id, it) == on) it else it.copy(appManage = appManage + (id to on)) }
     fun withProfile(p: UserProfile?, now: Long) = copy(userProfile = p?.copy(createdAt = userProfile?.createdAt ?: now))
     fun removeCustomFont(id: String) = copy(customFonts = customFonts.filterNot { it.id == id }, appFont = if (appFont == "custom:$id") "spaceGrotesk" else appFont)
     fun toggleBundleAppRemoval(bundleId: String, appId: String): Settings {

@@ -8,7 +8,8 @@ val json = Json { ignoreUnknownKeys = true; coerceInputValues = true; explicitNu
 object Platform { const val ANDROID = "Android"; const val PC = "PC"; const val TV = "TV" }
 
 /** What this device runs, read once at process start before any screen or background job asks. */
-object Device { @Volatile var isTv = false }
+/** [lowEnd]: a low-RAM phone, under 4 GB, where Orion starts in Lite performance mode. */
+object Device { @Volatile var isTv = false; @Volatile var lowEnd = false }
 
 /** Android apps install everywhere; TV apps install natively too when Orion runs on a TV (beta). */
 fun AppItem.installsHere() = platform == Platform.ANDROID || (platform == Platform.TV && Device.isTv)

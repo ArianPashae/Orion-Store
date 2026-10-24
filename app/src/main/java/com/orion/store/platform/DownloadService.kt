@@ -19,23 +19,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.Call
+import okhttp3.Protocol
 import okhttp3.Request
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 enum class DlStatus { RUNNING, SUCCESSFUL, FAILED }
 data class Dl(val fileName: String, val progress: Int = 0, val status: DlStatus = DlStatus.RUNNING)
 
-/** Download engine ported from AppTrackerPlugin.DownloadTask: Range resume, 3 retries, html/4xx fail fast, .tmp then rename. */
+/** Download engine ported from AppTrackerPlugin.DownloadTask: Range resume, 3 retries, html/4xx fail fast, .tmp then rename.
+ *  Big files from servers that take ranges come down over [PARTS] connections at once: CDNs like GitHub's cap speed per connection. */
 object Downloads {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -46,6 +52,10 @@ object Downloads {
     private val client by lazy {
         Net.client.newBuilder().callTimeout(0, TimeUnit.MILLISECONDS).connectTimeout(30, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
     }
+    /** HTTP/2 would multiplex the parts onto one connection, which is exactly the cap being dodged. */
+    private val h1 by lazy { client.newBuilder().protocols(listOf(Protocol.HTTP_1_1)).build() }
+    private const val PARTS = 4
+    private const val MIN_SPLIT = 4L shl 20
     val state = MutableStateFlow<Map<String, Dl>>(emptyMap())
     private enum class R { OK, RETRY, FATAL }
 
@@ -82,7 +92,7 @@ object Downloads {
 
     fun cancel(fileName: String) {
         if (!jobs.containsKey(fileName)) throw NativeError("INVALID_DOWNLOAD_ID")
-        cancelled += fileName; calls.remove(fileName)?.cancel(); jobs[fileName]?.cancel()
+        cancelled += fileName; calls.keys.filter { it == fileName || it.startsWith("$fileName#") }.forEach { calls.remove(it)?.cancel() }; jobs[fileName]?.cancel()
     }
 
     /** getDownloadProgress semantics: active → RUNNING/FAILED, else SUCCESSFUL only when the file exists and is non-empty. */
@@ -103,17 +113,66 @@ object Downloads {
                 tries++; delay(tries * 2000L)
             }
         } finally {
-            jobs.remove(name); calls.remove(name)
+            jobs.remove(name); calls.keys.filter { it == name || it.startsWith("$name#") }.forEach { calls.remove(it) }
+            File(dir(), "$name.parts").delete()
             if (name in cancelled) { File(dir(), "$name.tmp").delete(); forget(name) }
             else set(name) { if (result == R.OK) it.copy(progress = 100, status = DlStatus.SUCCESSFUL) else it.copy(status = DlStatus.FAILED) }
             if (jobs.isEmpty()) wake?.takeIf { it.isHeld }?.release()
         }
     }
 
-    private fun attempt(url: String, name: String): R {
+    private fun req(url: String) = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0 (Linux; Android 13) Chrome/110.0.0.0").header("Accept-Encoding", "identity")
+
+    /** Null when the file is small or the server can't split it: the caller falls back to one stream. */
+    private suspend fun split(url: String, name: String, fin: File): R? {
+        val (real, total) = h1.newCall(req(url).header("Range", "bytes=0-0").build()).also { calls[name] = it }.execute().use { r ->
+            if (r.code != 206 || r.body.contentType()?.toString()?.contains("text/html") == true) return null
+            r.request.url.toString() to (r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: return null)
+        }
+        if (total < MIN_SPLIT) return null
+        // Its own name, so a single-stream resume never mistakes a half-filled split file for a finished prefix
+        val temp = File(dir(), "$name.parts").apply { delete() }
+        RandomAccessFile(temp, "rw").use { it.setLength(total) }
+        val done = AtomicLong(); val step = total / PARTS
+        val ok = coroutineScope {
+            val ticker = launch { while (true) { delay(500); set(name) { it.copy(progress = (done.get() * 100 / total).toInt()) } } }
+            val parts = (0 until PARTS).map { i ->
+                async(Dispatchers.IO) {
+                    val end = if (i == PARTS - 1) total - 1 else (i + 1) * step - 1; var pos = i * step
+                    repeat(3) { t ->
+                        runCatching {
+                            h1.newCall(req(real).header("Range", "bytes=$pos-$end").build()).also { calls["$name#$i"] = it }.execute().use { r ->
+                                if (r.code != 206) return@async false
+                                RandomAccessFile(temp, "rw").use { out ->
+                                    out.seek(pos); val buf = ByteArray(1 shl 16); val inp = r.body.byteStream()
+                                    while (pos <= end) {
+                                        if (name in cancelled) return@async false
+                                        val n = inp.read(buf, 0, minOf(buf.size.toLong(), end - pos + 1).toInt()); if (n < 0) break
+                                        out.write(buf, 0, n); pos += n; done.addAndGet(n.toLong())
+                                    }
+                                    out.fd.sync()
+                                }
+                            }
+                        }
+                        if (pos > end) return@async true
+                        if (name in cancelled) return@async false
+                        delay((t + 1) * 1000L)
+                    }
+                    false
+                }
+            }.awaitAll().all { it }
+            ticker.cancel(); parts
+        }
+        if (name in cancelled) return R.RETRY
+        if (!ok) { temp.delete(); return null }
+        fin.delete(); return if (temp.renameTo(fin)) R.OK else R.RETRY
+    }
+
+    private suspend fun attempt(url: String, name: String): R {
         val temp = File(dir(), "$name.tmp"); val fin = File(dir(), name)
         var existing = if (temp.exists()) temp.length() else 0L
-        val rb = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0 (Linux; Android 13) Chrome/110.0.0.0").header("Accept-Encoding", "identity")
+        if (existing == 0L) split(url, name, fin)?.let { return it }
+        val rb = req(url)
         if (existing > 0) rb.header("Range", "bytes=$existing-")
         val call = client.newCall(rb.build()).also { calls[name] = it }
         call.execute().use { r ->
@@ -122,7 +181,7 @@ object Downloads {
             if (resume) total += existing else existing = 0
             RandomAccessFile(temp, "rw").use { out ->
                 if (resume) out.seek(existing) else out.setLength(0)
-                val buf = ByteArray(16384); var dl = existing; var last = 0L
+                val buf = ByteArray(1 shl 16); var dl = existing; var last = 0L
                 r.body.byteStream().use { inp ->
                     while (true) {
                         if (name in cancelled || !scope.isActive) return R.RETRY

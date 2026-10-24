@@ -184,7 +184,7 @@ fun Maintenance(vm: MainViewModel) {
     var game by remember { mutableStateOf(false) }; var donate by remember { mutableStateOf(false) }
     var taps by remember { mutableIntStateOf(0) }; var last by remember { mutableLongStateOf(0L) }; var dev by remember { mutableStateOf(false) }
     val socials = vm.config?.socials ?: Defaults.DEV_SOCIALS
-    val cs = MaterialTheme.colorScheme; val ty = MaterialTheme.typography; val still = LocalS.current.disableAnimations
+    val cs = MaterialTheme.colorScheme; val ty = MaterialTheme.typography; val still = LocalS.current.calm
     val inf = rememberInfiniteTransition(label = "bg")
     val spin by inf.animateFloat(0f, if (still) 0f else 360f, infiniteRepeatable(tween(60_000, easing = LinearEasing)), label = "spin")
     // A slow breathing fill instead of the indeterminate sweep, which reads as frantic on a page meant to calm

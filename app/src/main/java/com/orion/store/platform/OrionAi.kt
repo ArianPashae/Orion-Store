@@ -17,7 +17,7 @@ import kotlin.coroutines.coroutineContext
 /** Chat providers for Orion AI. Gemini and Claude have their own formats, Local runs on the phone, the rest speak the OpenAI chat format. */
 enum class AiProvider(val id: String, val label: String, val base: String, val model: String, val keyUrl: String, val keyHint: String) {
     GEMINI("gemini", "Gemini", "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash", "https://aistudio.google.com/apikey", "AIza..."),
-    OPENAI("openai", "ChatGPT", "https://api.openai.com/v1", "gpt-4o-mini", "https://platform.openai.com/api-keys", "sk-..."),
+    OPENAI("openai", "ChatGPT", "https://api.openai.com/v1", "gpt-5-mini", "https://platform.openai.com/api-keys", "sk-..."),
     CLAUDE("claude", "Claude", "https://api.anthropic.com/v1", "claude-haiku-4-5", "https://console.anthropic.com/settings/keys", "sk-ant-..."),
     OPENROUTER("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openrouter/auto", "https://openrouter.ai/keys", "sk-or-..."),
     GROQ("groq", "Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", "https://console.groq.com/keys", "gsk_..."),
@@ -45,8 +45,12 @@ object OrionAi {
 - Mention every app you recommend with its catalog number in square brackets, like Metrolist [12]. For app requests suggest 3 to 5 apps, best first, a few words on each.
 - Recommend only apps ${if (full) "in the catalog below. \"Catalog matches\" in a message adds details for likely ones" else "from \"Catalog matches\" in the latest message"}. Never invent apps or numbers. If nothing fits, say so and suggest how to ask.
 - For questions about Orion itself (how to do something, where a setting is, what a feature does), answer from the Orion guide${if (full) " below" else " notes in the message"} in two or three sentences and mention the feature with its guide number, like Palette maker [g12], so the user can open it. Never invent features.
+- Each message says which catalog apps are on this phone. Don't recommend those again unless asked; use the list for questions about their apps or updates, and say when an app they ask for is already installed.
+- Follow-ups like "something lighter" or "the second one" refer to apps you suggested earlier in the chat.
+- For "which is better" or comparisons, name a clear pick and the one reason that decides it.
+- Install help: a failed install over an app already on the phone means the two copies come from different makers (Play Store version vs a mod, or two mods). The fix is to uninstall the current one first, backing up its data. On Samsung and others a hidden copy in Secure Folder, a Work profile, Dual apps or Second space blocks it too. Built-in system apps can't be replaced by a mod: use the mod's non-root build.
 - For greetings and small talk, answer in one sentence without apps.
-- Plain text only, no markdown, under 90 words.
+- Reply in the language the user writes in. Plain text only, no markdown, under 120 words.
 - About Orion: Android, PC and TV catalogs, auto-updates, Guardian and Sentinel security tools, backups, themes and palettes, XP and badges.
 - The user is on ${if (tv) "an Android TV, so prefer TV apps, then Android apps" else "an Android phone, so prefer Android apps"}. Suggest PC apps only when asked for PC or Windows software.""")
         if (full) { append("\n\nOrion guide (number chapter / feature: what it does):\n"); guide.forEachIndexed { i, (t, b) -> append('g').append(i).append(' ').append(t).append(": ").append(b).append('\n') } }
@@ -81,7 +85,7 @@ object OrionAi {
         val extra = base.flatMap { w -> SYNONYMS.entries.firstOrNull { w.startsWith(it.key) }?.value?.split(' ').orEmpty() }
         val words = (base.map { it to 2 } + extra.map { it to 1 }).distinctBy { it.first }
         return catalog.withIndex().map { (i, a) ->
-            val n = a.name.lowercase(); val c = a.category.lowercase(); val t = a.tags.joinToString(" ").lowercase(); val d = a.description.lowercase()
+            val n = a.name.lowercase(); val c = a.category.lowercase(); val t = (a.tags + a.author).joinToString(" ").lowercase(); val d = a.description.lowercase()
             i to words.sumOf { (w, k) -> k * ((if (w in n) 4 else 0) + (if (w in c) 3 else 0) + (if (w in t) 2 else 0) + (if (w in d) 1 else 0)) }
         }.filter { it.second > 1 }.sortedByDescending { it.second }.take(limit).map { it.first }
     }
@@ -109,7 +113,7 @@ object OrionAi {
                     putJsonObject("systemInstruction") { putJsonArray("parts") { addJsonObject { put("text", system) } } }
                     putJsonArray("contents") { turns.forEach { t -> addJsonObject { put("role", if (t.user) "user" else "model"); putJsonArray("parts") { addJsonObject { put("text", t.text) } } } } }
                     putJsonObject("generationConfig") {
-                        put("temperature", .6); put("maxOutputTokens", 600)
+                        put("temperature", .6); put("maxOutputTokens", 800)
                         // Thinking is what made answers take minutes; picking apps from a short list does not need it
                         when {
                             "2.5-flash" in m -> putJsonObject("thinkingConfig") { put("thinkingBudget", 0) }
@@ -125,7 +129,7 @@ object OrionAi {
             }
             AiProvider.CLAUDE -> {
                 val body = buildJsonObject {
-                    put("model", m); put("max_tokens", 600); put("system", system); put("stream", true)
+                    put("model", m); put("max_tokens", 800); put("system", system); put("stream", true)
                     putJsonArray("messages") { turns.forEach { t -> addJsonObject { put("role", if (t.user) "user" else "assistant"); put("content", t.text) } } }
                 }
                 sse(Request.Builder().url("${root(p, base)}/messages").header("x-api-key", key).header("anthropic-version", "2023-06-01")

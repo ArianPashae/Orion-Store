@@ -3,21 +3,25 @@ package com.orion.store.ui
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.orion.store.data.*
@@ -43,8 +47,9 @@ private fun tone(r: MyAppRow): Pair<ImageVector, Color> = when {
 fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
     val s = LocalS.current; val d = LocalD.current
     var filter by rememberSaveable { mutableStateOf(MyAppsFilter.ALL) }; val query = vm.libraryQuery
+    var unmanagedOpen by rememberSaveable { mutableStateOf(false) }
     val updateIds = vm.updates.map { it.id }.toSet()
-    val rows = remember(d, s.installedVersions, s.lastRemoteVersions, updateIds) { buildMyAppsRows(vm.allApps(), s, d, updateIds) }
+    val rows = remember(d, s, updateIds) { buildMyAppsRows(vm.allApps(), s, d, updateIds) }
     val pending = rows.filter { it.hasUpdate && it.status != "downloading" }
     val visible = rows.filter { it.matches(filter) && it.matchesQuery(query) }
     val queue = d.activeDownloads.size + d.readyToInstall.size
@@ -52,15 +57,13 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
     LazyColumn(Modifier.fillMaxSize().readableWidth(), contentPadding = padding) {
         item("header") { Header(vm) }
         item {
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                item {
-                    FilledTonalButton({ vm.haptic(H.SELECTION); vm.openSettings("queue") }, shapes = ButtonDefaults.shapes(), contentPadding = ButtonDefaults.SmallContentPadding) {
-                        Icon(Sym.Downloading, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Queue")
-                        if (queue > 0) { Spacer(Modifier.width(6.dp)); Badge { Text("$queue") } }
-                    }
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilledTonalButton({ vm.haptic(H.SELECTION); vm.openSettings("queue") }, shapes = ButtonDefaults.shapes(), contentPadding = ButtonDefaults.SmallContentPadding) {
+                    Icon(Sym.Downloading, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Queue")
+                    if (queue > 0) { Spacer(Modifier.width(6.dp)); Badge { Text("$queue") } }
                 }
-                item { VerticalDivider(Modifier.height(28.dp).padding(horizontal = 4.dp), color = cs.outlineVariant) }
-                items(MyAppsFilter.entries) { f -> Choice(filter == f, "${f.label} · ${rows.count { it.matches(f) }}", filterIcon(f)) { filter = f } }
+                VerticalDivider(Modifier.height(28.dp).padding(horizontal = 4.dp), color = cs.outlineVariant)
+                FilterPills(vm, s.myAppsFilters) { f -> Choice(filter == f, "${f.label} · ${rows.count { it.matches(f) }}", filterIcon(f)) { filter = f } }
             }
         }
         if (filter == MyAppsFilter.UPDATES && pending.isNotEmpty()) item {
@@ -78,21 +81,72 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
         // Ignored updates: listed with a one-tap undo, under All and Updates where a missing update would be noticed
         val now = System.currentTimeMillis(); val lookup = vm.lookup
         val ignored = if (filter == MyAppsFilter.ALL || filter == MyAppsFilter.UPDATES)
-            s.ignoredUpdates.keys.mapNotNull { id -> lookup[id]?.takeIf { isUpdateIgnored(it, s, now) } } else emptyList()
+            s.ignoredUpdates.keys.mapNotNull { id -> lookup[id]?.takeIf { isManaged(id, s) && isUpdateIgnored(it, s, now) } } else emptyList()
         if (ignored.isNotEmpty()) item("ignored-title") {
             Text("Ignored updates · ${ignored.size}", Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMediumEmphasized)
         }
         // Segmented items draw their own rounded container, so the corners come out the same on every GPU instead of depending on clip support
         itemsIndexed(ignored, key = { _, a -> "ignored-${a.id}" }) { i, a ->
-            val until = when (s.ignoredUpdates[a.id]?.type) { "week" -> "Hidden for a week"; "version" -> "Hidden until the next version"; else -> "Hidden for good" }
-            SegmentedListItem({ vm.selectApp(a) }, ListItemDefaults.segmentedShapes(i, ignored.size), Modifier.animateItem().padding(horizontal = 16.dp).then(if (s.compactMode) CompactRowHeight else Modifier),
-                supportingContent = { Text(until) }, leadingContent = { AppIcon(a, if (s.compactMode) 36.dp else 44.dp) },
-                trailingContent = { FilledTonalButton({ vm.set { it.copy(ignoredUpdates = it.ignoredUpdates - a.id) }; vm.haptic(H.SUCCESS) }, shapes = ButtonDefaults.shapes(),
-                    contentPadding = ButtonDefaults.SmallContentPadding) { Text("Unignore") } },
-                colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer), contentPadding = if (s.compactMode) CompactRowPadding else ListItemDefaults.ContentPadding,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val ig = s.ignoredUpdates[a.id]
+            val until = when (ig?.type) {
+                "week" -> ((ONE_WEEK_MS - (now - (ig.timestamp ?: now))) / 86_400_000L + 1).coerceIn(1, 7).let { "Hidden for $it more day${if (it == 1L) "" else "s"}" }
+                "version" -> "Hidden until the next version"; else -> "Hidden for good"
             }
+            SideRow(a, i, ignored.size, until, "Unignore") { vm.set { it.copy(ignoredUpdates = it.ignoredUpdates - a.id) } }
+        }
+        // Not managed: hidden by the user or by the other-stores filter. Collapsed, so they stay out of the way.
+        if (filter == MyAppsFilter.ALL || filter == MyAppsFilter.INSTALLED) {
+            val off = vm.allApps().filter { !isManaged(it.id, s) && (it.id in s.installedVersions || s.appManage[it.id] == false) }
+            if (off.isNotEmpty()) item("unmanaged-title") {
+                val open = unmanagedOpen
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp).clickable { vm.haptic(H.SELECTION); unmanagedOpen = !open }.padding(start = 24.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("Not managed · ${off.size}", Modifier.weight(1f), style = MaterialTheme.typography.titleMediumEmphasized)
+                    Icon(if (open) Sym.ExpandLess else Sym.ExpandMore, if (open) "Collapse" else "Expand", tint = cs.onSurfaceVariant)
+                }
+            }
+            if (unmanagedOpen) itemsIndexed(off, key = { _, a -> "unmanaged-${a.id}" }) { i, a ->
+                val why = if (s.appManage[a.id] == false) "Hidden by you" else otherStore(a.id, s)?.let { "Installed by ${vm.tracker.labelOf(it)}" } ?: "Not managed"
+                SideRow(a, i, off.size, why, "Manage") { vm.set { it.withManaged(a.id, true) } }
+            }
+        }
+    }
+}
+
+/** A segmented row with one tonal action, for the ignored and not-managed lists. Segmented items draw their own rounded container,
+ *  so the corners come out the same on every GPU instead of depending on clip support. */
+@Composable
+private fun LazyItemScope.SideRow(a: AppItem, i: Int, n: Int, supporting: String, action: String, onAction: () -> Unit) {
+    val vm = LocalVm.current; val compact = LocalS.current.compactMode
+    SegmentedListItem({ vm.selectApp(a) }, ListItemDefaults.segmentedShapes(i, n), Modifier.animateItem().padding(horizontal = 16.dp).then(if (compact) CompactRowHeight else Modifier),
+        supportingContent = { Text(supporting, maxLines = 1, overflow = TextOverflow.Ellipsis) }, leadingContent = { AppIcon(a, if (compact) 36.dp else 44.dp) },
+        trailingContent = { FilledTonalButton({ onAction(); vm.haptic(H.SUCCESS) }, shapes = ButtonDefaults.shapes(), contentPadding = ButtonDefaults.SmallContentPadding) { Text(action) } },
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer), contentPadding = if (compact) CompactRowPadding else ListItemDefaults.ContentPadding,
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Filter pills in the saved order. Long-press a pill and drag it sideways to move it; the order saves on release. */
+@Composable
+private fun FilterPills(vm: MainViewModel, saved: List<String>, pill: @Composable (MyAppsFilter) -> Unit) {
+    var order by remember(saved) { mutableStateOf(myAppsFilterOrder(saved)) }
+    var dragged by remember { mutableStateOf<MyAppsFilter?>(null) }; var dx by remember { mutableFloatStateOf(0f) }
+    val widths = remember { mutableMapOf<MyAppsFilter, Int>() }; val gap = with(LocalDensity.current) { 6.dp.toPx() }
+    fun end() { if (dragged != null) vm.set { it.copy(myAppsFilters = order.map { f -> f.name }) }; dragged = null; dx = 0f }
+    order.forEach { f ->
+        key(f) {
+            val on = dragged == f
+            Box(Modifier.onSizeChanged { widths[f] = it.width }.zIndex(if (on) 1f else 0f)
+                .graphicsLayer { if (on) { translationX = dx; scaleX = 1.06f; scaleY = 1.06f } }
+                .pointerInput(f) {
+                    detectDragGesturesAfterLongPress({ dragged = f; dx = 0f; vm.haptic(H.MEDIUM) }, ::end, ::end) { c, delta ->
+                        c.consume(); dx += delta.x
+                        val i = order.indexOf(f); val j = if (dx > 0) i + 1 else i - 1
+                        val w = (order.getOrNull(j)?.let { widths[it] } ?: return@detectDragGesturesAfterLongPress) + gap
+                        if (kotlin.math.abs(dx) > w / 2) { order = order.toMutableList().apply { add(j, removeAt(i)) }; dx -= if (j > i) w else -w; vm.haptic(H.SELECTION) }
+                    }
+                }) { pill(f) }
         }
     }
 }

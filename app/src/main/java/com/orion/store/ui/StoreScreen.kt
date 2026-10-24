@@ -368,7 +368,7 @@ private fun Hero(vm: MainViewModel, c: StoreCollection, modifier: Modifier) = Co
     val n = c.apps.size; val pager = rememberPagerState { n }; val s = LocalS.current; val cs = MaterialTheme.colorScheme
     val glide = MaterialTheme.motionScheme.slowSpatialSpec<Float>()
     LaunchedEffect(pager, n) {
-        if (n > 1 && !s.disableAnimations) while (true) { delay(5500); if (!pager.isScrollInProgress) pager.animateScrollToPage((pager.currentPage + 1) % n, animationSpec = glide) }
+        if (n > 1 && !s.calm) while (true) { delay(5500); if (!pager.isScrollInProgress) pager.animateScrollToPage((pager.currentPage + 1) % n, animationSpec = glide) }
     }
     HorizontalPager(pager, Modifier.fillMaxWidth().height(176.dp), contentPadding = PaddingValues(horizontal = 16.dp), pageSpacing = 10.dp, key = { c.apps[it].id }) { i ->
         HeroCard(vm, c.apps[i], c.id) { pager.getOffsetDistanceInPages(i).coerceIn(-1f, 1f) }

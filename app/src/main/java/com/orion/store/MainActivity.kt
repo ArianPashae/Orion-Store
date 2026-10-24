@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
         ResultHost.launch = { i, cb -> pending = cb; results.launch(i) }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) { Store.settings.flow.map { it.highRefreshRate }.distinctUntilChanged().collect { vm.tracker.setHighRefreshRate(this@MainActivity, it) } }
+            repeatOnLifecycle(Lifecycle.State.STARTED) { Store.settings.flow.map { it.highRefreshRate || it.perf == "boost" }.distinctUntilChanged().collect { vm.tracker.setHighRefreshRate(this@MainActivity, it) } }
         }
         if (savedInstanceState == null) handle(intent)
         setContent { OrionRoot(vm) }

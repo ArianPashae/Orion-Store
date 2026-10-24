@@ -115,7 +115,7 @@ object AutoUpdate {
         Store.data.update { if (app.id in it.readyToInstall) it else it.completeDownload(app.id, name, now) }
         if (!s.autoInstall) { notifyReady(ctx, app, name); return null }
 
-        val error = install(ctx, tracker, s, f, actual)
+        val error = install(ctx, tracker, s, f, actual, app.name)
         if (error != null) { notifyReady(ctx, app, name, error); return result(false, error) }
         val ver = tracker.appInfo(actual).version
         Store.settings.update { it.copy(installedVersions = it.installedVersions + (app.id to ver), lastRemoteVersions = it.lastRemoteVersions + (app.id to ver),
@@ -126,26 +126,19 @@ object AutoUpdate {
     }
 
     /** Null on success, else why it failed, worded for the user. */
-    private suspend fun install(ctx: Context, tracker: AppTracker, s: Settings, f: File, pkg: String): String? {
-        if (s.rootMode || s.useShizuku) return runCatching { tracker.installShizuku(f.name, s.updateLock) }.exceptionOrNull()?.let { reason(it.message) }
+    private suspend fun install(ctx: Context, tracker: AppTracker, s: Settings, f: File, pkg: String, name: String): String? {
+        tracker.clash(f)?.let { return clashText(it.second, name).second }
+        if (s.rootMode || s.useShizuku) return runCatching { tracker.installShizuku(f.name, s.updateLock) }.exceptionOrNull()?.let { installFailureText(it.message, name).second }
         if (Build.VERSION.SDK_INT < 31) return "Android ${Build.VERSION.RELEASE} needs you to confirm installs. Root or Shizuku make them silent."
         if (!tracker.canRequestInstalls()) return "Allow Orion to install apps, then updates can install on their own."
         val (status, msg) = sessionInstall(ctx, f, pkg)
         return when (status) {
             PackageInstaller.STATUS_SUCCESS -> null
             PackageInstaller.STATUS_PENDING_USER_ACTION -> "Android asked to confirm this one. That happens for apps another store installed, or apps built for an old Android version."
-            else -> reason(msg)
+            else -> installFailureText(msg, name).second
         }
     }
 
-    private fun reason(m: String?) = when {
-        m == null -> "Install failed."
-        "UPDATE_INCOMPATIBLE" in m || "signatures do not match" in m.lowercase() -> "This update is signed by a different developer than the installed app. Uninstall it first to switch."
-        "INSUFFICIENT_STORAGE" in m -> "Not enough storage to install."
-        "VERSION_DOWNGRADE" in m -> "The installed version is newer than the catalog."
-        "Shizuku" in m -> "Shizuku is not running, so the silent install could not happen."
-        else -> m.take(160)
-    }
 
     private val sessions = ConcurrentHashMap<Int, CompletableDeferred<Pair<Int, String?>>>()
 
