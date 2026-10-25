@@ -3,6 +3,7 @@ package com.orion.store.platform
 import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -23,6 +24,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
 import com.orion.store.data.Clash
 import com.orion.store.data.Net
+import com.orion.store.data.installArgs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -51,7 +53,7 @@ data class NetSecurity(
     val isCaptivePortal: Boolean = false, val isHiddenSsid: Boolean = false, val encryptionType: String = "UNKNOWN", val dnsServers: List<String> = emptyList(),
 )
 
-/** Bridges activity-result launches (installer, document picker) from non-UI code. Set by MainActivity. */
+/** Bridges activity-result launches (installer, document picker) from non-UI code. Set by OrionActivity. */
 object ResultHost {
     var launch: ((Intent, (Int, Intent?) -> Unit) -> Unit)? = null
     suspend fun run(i: Intent): Pair<Int, Intent?> = suspendCancellableCoroutine { c ->
@@ -230,19 +232,22 @@ class AppTracker(private val ctx: Context) {
     }
 
     /** Streams the APK into `pm install`. Root also records Orion as the installer, so Android's "App details in store" and update ownership point here. */
-    suspend fun installShizuku(fileName: String, lock: Boolean = false) = withContext(Dispatchers.IO) {
+    suspend fun installShizuku(fileName: String, lock: Boolean = false, opts: Collection<String> = emptyList()) = withContext(Dispatchers.IO) {
         val f = resolve(fileName)
+        // A process the background updater started gets Shizuku's binder a moment after launch
+        if (!root) for (i in 0 until 30) { if (shizukuRunning()) break; delay(100) }
         requireShizuku()
         val owner = if (root) " -i ${ctx.packageName}" + if (lock && Build.VERSION.SDK_INT >= 34) " --update-ownership" else "" else ""
-        fun attempt(flags: String) = sh("pm install -r --restrict-permissions$flags -S ${f.length()}").let { p ->
+        val args = installArgs(opts, Build.VERSION.SDK_INT, owner)
+        fun attempt(flags: String) = sh("pm install -r$flags -S ${f.length()}").let { p ->
             p.outputStream.use { o -> f.inputStream().use { it.copyTo(o) } }
             // pm prints "Failure [INSTALL_FAILED_...]" on stdout, the part that says why
             val out = p.inputStream.bufferedReader().readText(); val code = p.waitFor()
             (if (code == 0 && "Failure" in out) 1 else code) to "${out.trim()} ${p.err()}".trim()
         }
-        var (code, err) = attempt(owner)
+        var (code, err) = attempt(args)
         // Some ROMs ship a pm without --update-ownership: install anyway rather than fail the update
-        if (code != 0 && "update-ownership" in err) attempt(owner.replace(" --update-ownership", "")).let { code = it.first; err = it.second }
+        if (code != 0 && "update-ownership" in err) attempt(args.replace(" --update-ownership", "")).let { code = it.first; err = it.second }
         if (code != 0) throw NativeError("Install failed (Code $code): $err")
     }
 
@@ -437,6 +442,29 @@ class AppTracker(private val ctx: Context) {
 
     fun launch(pkg: String) = ctx.startActivity((pm.getLaunchIntentForPackage(pkg) ?: pm.getLeanbackLaunchIntentForPackage(pkg) ?: throw NativeError("App not found")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     fun uninstall(pkg: String) = ctx.startActivity(Intent(Intent.ACTION_DELETE, "package:$pkg".toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+
+    /** Android's own uninstall prompt, returning once the user answered it. */
+    suspend fun uninstallPrompt(pkg: String) {
+        val i = Intent(Intent.ACTION_DELETE, "package:$pkg".toUri()).putExtra(Intent.EXTRA_RETURN_RESULT, true)
+        if (ResultHost.launch == null) uninstall(pkg) else ResultHost.run(i)
+    }
+
+    /** Root or Shizuku: removes the app without a system prompt (Orion asks first). */
+    suspend fun uninstallSilent(pkg: String) = withContext(Dispatchers.IO) {
+        if (!pkg.matches(Regex("[A-Za-z0-9_.]+"))) throw NativeError("Invalid package name")
+        requireShizuku()
+        val p = sh("pm uninstall $pkg"); val out = p.inputStream.bufferedReader().readText(); val code = p.waitFor()
+        if (code != 0 || "Success" !in out) throw NativeError("Uninstall failed: ${out.trim()} ${p.err()}".trim())
+    }
+    /** Turns on the launcher alias for icon [id] (see APP_ICONS) before turning the others off, so the app never drops off the launcher. */
+    fun setLauncherIcon(id: String) {
+        fun alias(v: String) = ComponentName(ctx.packageName, "com.orion.store." + if (v == "default") "MainActivity" else "Icon" + v.replaceFirstChar { it.uppercase() })
+        val ids = com.orion.store.data.APP_ICONS.map { it.id }
+        (listOf(id) + (ids - id)).forEach { v ->
+            pm.setComponentEnabledSetting(alias(v), if (v == id) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+        }
+    }
+
     fun open(url: String) = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
 
     @Suppress("DEPRECATION")

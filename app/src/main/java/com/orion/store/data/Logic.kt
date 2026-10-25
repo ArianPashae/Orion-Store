@@ -576,9 +576,10 @@ fun submissionIssueUrl(apps: String, count: Int, firstName: String?, version: St
 
 /** Every XP source in one place: the pilot card, rank badges, submission page and leaderboard all read this. */
 object Xp {
-    const val AD = 40; const val SUBMISSION = 100; const val APP = 10
+    const val AD = 40; const val SUBMISSION = 100; const val APP = 10; const val COSMETIC = 150
     /** [apps] is the library size: each app counts once, so re-downloading the same APK cannot farm XP. */
-    fun total(s: Settings, apps: Int) = s.adWatchCount * AD.toLong() + s.submissionCount * SUBMISSION.toLong() + apps * APP.toLong() + s.gameXP
+    fun total(s: Settings, apps: Int) = s.adWatchCount * AD.toLong() + s.submissionCount * SUBMISSION.toLong() + apps * APP.toLong() + s.gameXP +
+        COSMETIC_BADGES.count { (_, set) -> set.all { it.unlocked(s) } } * COSMETIC.toLong()
     /** XP from level n to n + 1 grows quadratically: 61, 74, 89... 250 at 10, 1,250 at 30. Bronze (10) takes 1,185 XP, Silver (30) 14,355, Gold (50) 55,125. */
     fun step(n: Int) = 50L + 10L * n + n.toLong() * n
 
@@ -634,6 +635,150 @@ fun parseReleases(raw: String): List<Release> {
         // Release names read like "Orion-RE : The Labyrinth Update"; the part after the colon is the title
         val name = str("name").substringAfter(':').trim().ifEmpty { str("name") }
         Release(str("tag_name").removePrefix("v"), name, runCatching { time.parse(str("published_at"))!!.time }.getOrDefault(0), str("html_url"), releaseHighlights(str("body")))
+    }
+}
+// endregion
+
+// region app release notes
+/** The repo an app's releases come from: the catalog's repo fields first, then its repo URL. */
+fun appRepo(app: AppItem): RepoSource? {
+    fun path(s: String?) = s?.trim()?.substringAfter("://")?.substringAfter(".com/")?.substringAfter(".org/")?.trim('/')?.removeSuffix(".git")?.takeIf { '/' in it }
+    path(app.githubRepo)?.let { return RepoSource("github", it, it.substringBefore('/'), it.substringAfterLast('/')) }
+    path(app.gitlabRepo)?.let { return RepoSource("gitlab", it, it.substringBefore('/'), it.substringAfterLast('/'), app.gitlabDomain?.ifBlank { null } ?: "gitlab.com") }
+    path(app.codebergRepo)?.let { return RepoSource("codeberg", it, it.substringBefore('/'), it.substringAfterLast('/')) }
+    return app.repoUrl?.let(::parseRepoSource)
+}
+
+/** API URL for one release of [app] and the JSON field holding its notes. */
+fun releaseNotesApi(app: AppItem, tag: String): Pair<String, String>? {
+    if (tag.isBlank()) return null
+    val r = appRepo(app) ?: return null; val t = enc(tag)
+    return when (r.provider) {
+        "github" -> "https://api.github.com/repos/${r.repoPath}/releases/tags/$t" to "body"
+        "gitlab" -> "https://${r.domain}/api/v4/projects/${enc(r.repoPath)}/releases/$t" to "description"
+        else -> "https://codeberg.org/api/v1/repos/${r.repoPath}/releases/tags/$t" to "body"
+    }
+}
+
+/** Release notes as plain readable lines. Kept: headings (still marked with #) and bullets. Dropped: HTML, images, badges, code blocks,
+ *  tables, link targets and bare URLs, emphasis markers, emoji shortcodes, "by @user in #12" credits, checksums, and GitHub's
+ *  Full Changelog / New Contributors / Assets boilerplate. Capped at 40 lines. */
+fun cleanNotes(md: String): String {
+    val drop = Regex("""(?i)^[#*_\s]*(full changelog|new contributors|assets|checksums?|sha-?256|md5|download|installation)\b.*""")
+    return md.replace("\r", "")
+        .replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        .replace(Regex("```.*?```", RegexOption.DOT_MATCHES_ALL), "")
+        .replace(Regex("""<details>.*?</details>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)), "")
+        .replace(Regex("""!\[[^\]]*]\([^)]*\)"""), "")
+        .replace(MD_LINK, "$1")
+        .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
+        .replace(Regex("<[^>]+>"), "")
+        .lines().asSequence().map { it.trim() }
+        // A boilerplate heading drops its whole section up to the next heading
+        .fold(mutableListOf<String>() to false) { (out, skip), l ->
+            val h = l.startsWith("#"); val off = if (h) drop.matches(l) else skip
+            if (!off && !(drop.matches(l) && !h)) out += l
+            out to off
+        }.first.asSequence()
+        .filterNot { it.startsWith("|") || it.matches(Regex("[-*_=]{3,}")) || it.matches(Regex("""(?i).*\b[0-9a-f]{32,}\b.*""")) }
+        .map { l ->
+            l.replace(Regex("""\s+by @[\w-]+( in \S+)?"""), "").replace(Regex("""https?://\S+"""), "").replace(Regex("""(?<!\w):[a-z0-9_+-]+:(?!\w)"""), "")
+                .replace(Regex("""(\*\*|__|~~|`)"""), "").replace(Regex("""(?<![\w*])\*(?!\s)([^*]+)\*"""), "$1")
+                .replace(Regex("""\(\s*\)"""), "").trimEnd(' ', ':', ',')
+        }
+        .map { l -> Regex("""^[-*+]\s+(\[[ xX]]\s+)?""").find(l)?.let { "• " + l.substring(it.range.last + 1).trim() } ?: l }
+        .filterNot { it == "•" || it.removePrefix("•").isBlank() && it.isNotEmpty() || it.startsWith("#") && it.trimStart('#').trim().let { h -> h.isEmpty() || h.lowercase().matches(Regex("what.?s changed|changelog|changes")) } }
+        .toList().joinToString("\n").replace(Regex("\n{3,}"), "\n\n").trim()
+        .lines().take(40).joinToString("\n")
+}
+// endregion
+
+// region category guess
+/** The catalog's own categories, the ones a submission can pick. */
+val SUBMIT_CATEGORIES = listOf("Utility", "Media", "Productivity", "Music", "Customization", "Privacy", "Social", "Development", "Reading", "Games", "Anime", "Health", "Education", "Browsers")
+
+private val STOP = ("the and for with your you that this app apps android from are can all not but has have its into more one use using also any via based open source free " +
+    "simple fast lightweight client new best easy made support supports").split(' ').toSet()
+private fun words(s: String) = s.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length > 2 && it !in STOP && !it.all(Char::isDigit) }
+
+/** Word counts per category, learned from how the live catalog files its apps. */
+class CategoryModel(catalog: List<AppItem>, private val choices: List<String> = SUBMIT_CATEGORIES) {
+    private val docs = HashMap<String, Int>(); private val counts = HashMap<String, HashMap<String, Int>>(); private val totals = HashMap<String, Int>()
+    private val vocab = HashSet<String>()
+    init {
+        catalog.forEach { a ->
+            val c = choices.firstOrNull { it.equals(a.category, true) } ?: return@forEach
+            docs[c] = (docs[c] ?: 0) + 1
+            val m = counts.getOrPut(c) { HashMap() }
+            words("${a.name} ${a.description}").forEach { w -> m[w] = (m[w] ?: 0) + 1; totals[c] = (totals[c] ?: 0) + 1; vocab += w }
+        }
+    }
+
+    /** Naive Bayes over the name, description and repo topics (topics count double); null when no word is known to the catalog. */
+    fun guess(text: String, topics: List<String> = emptyList()): String? {
+        val ws = (words(text) + topics.flatMap { t -> words(t.replace('-', ' ')).let { it + it } }).filter { it in vocab }
+        if (ws.isEmpty() || docs.isEmpty()) return null
+        val n = docs.values.sum().toDouble(); val v = vocab.size
+        return docs.keys.maxByOrNull { c ->
+            val m = counts[c].orEmpty(); val t = totals[c] ?: 0
+            .5 * kotlin.math.ln(docs.getValue(c) / n) + ws.sumOf { kotlin.math.ln(((m[it] ?: 0) + .5) / (t + .5 * v)) }
+        }
+    }
+}
+// endregion
+
+// region cosmetics
+/** A launcher icon or dock style. [ads]: lifetime Fuel the Code ads that unlock it, 0 when free. */
+data class Cosmetic(val id: String, val label: String, val ads: Int = 0) {
+    fun progress(s: Settings) = s.unlockProgress[id] ?: 0
+    fun unlocked(s: Settings) = progress(s) >= ads
+}
+
+val APP_ICONS = listOf(Cosmetic("default", "Orion"), Cosmetic("midnight", "Midnight"), Cosmetic("sunset", "Sunset"), Cosmetic("ocean", "Ocean"),
+    Cosmetic("mint", "Mint"), Cosmetic("neon", "Neon", 50), Cosmetic("gold", "Gold", 100))
+val DOCKS = listOf(Cosmetic("pill", "Pill"), Cosmetic("bar", "Classic"), Cosmetic("icons", "Icons"), Cosmetic("labels", "Labeled"),
+    Cosmetic("vibrant", "Expressive", 25), Cosmetic("shapes", "Shape shift", 50))
+/** Earned once every locked item of the set is unlocked. */
+val COSMETIC_BADGES = listOf("Icon Collector" to APP_ICONS.filter { it.ads > 0 }, "Dock Master" to DOCKS.filter { it.ads > 0 })
+// endregion
+
+// region install options
+/** One `pm install` switch offered before a root or Shizuku install. [flag] null: handled in [installArgs]. [excludes]: the option it can't be combined with. */
+data class InstallOption(val id: String, val label: String, val desc: String, val flag: String?, val minSdk: Int = 0, val excludes: String? = null)
+
+val INSTALL_OPTIONS = listOf(
+    InstallOption("downgrade", "Allow downgrade", "Install an older version over a newer one, keeping its data", "-d"),
+    InstallOption("grant", "Grant all permissions", "Every runtime permission the app asks for, granted on install. Special access like All files stays manual.", "-g"),
+    InstallOption("restricted", "Allow restricted settings", "SMS, call log and accessibility work without Android's restricted-settings block", null),
+    InstallOption("test", "Allow test builds", "Debug and test-only APKs install too", "-t"),
+    InstallOption("lowsdk", "Bypass target SDK block", "Install apps built for old Android versions", "--bypass-low-target-sdk-block", 34),
+    InstallOption("forcesdk", "Allow preview SDK builds", "Install apps built against an unreleased Android preview", "--force-sdk"),
+    InstallOption("dontkill", "Keep the app running", "Don't stop the app while it updates", "--dont-kill"),
+    InstallOption("currentuser", "Only this user", "Skip other profiles like Work, Secure Folder and Dual apps", "--user current"),
+    InstallOption("internal", "Internal storage", "Force the app onto internal storage", "--install-location 1", excludes = "external"),
+    InstallOption("external", "Prefer SD card", "Put the app on adopted or external storage when there is room", "--install-location 2", excludes = "internal"),
+    InstallOption("rollback", "Enable rollback", "Let Android roll this update back later", "--enable-rollback", 29),
+    InstallOption("noverify", "Skip package verification", "No Play Protect style verifier check. Signatures are still checked.", "--skip-verification", 31),
+    InstallOption("queryable", "Visible to every app", "Other apps can see this app even when Android's package visibility would hide it", "--force-queryable", 30),
+    InstallOption("nodexopt", "Ignore dexopt profile", "Skip the shipped startup profile while compiling the app", "--ignore-dexopt-profile", 35),
+    InstallOption("instant", "Instant app", "Install as an instant app that runs without a full install", "--instant", 26, excludes = "full"),
+    InstallOption("full", "Full app", "Install as a full app, also turning an instant app into a regular one", "--full", 26, excludes = "instant"),
+    InstallOption("preload", "Virtual preload", "Mark the app as preloaded, like the ones that ship with the phone", "--preload", 27),
+    InstallOption("play", "Show as installed by Play Store", "For apps that refuse to run unless Google Play installed them", "-i com.android.vending", excludes = "installer"),
+    InstallOption("installer", "Custom installer", "Report any package as the app's installer", null, excludes = "play"),
+)
+
+private val PACKAGE = Regex("""[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+""")
+
+/** The pm install arguments for [opts] on [sdk]; [owner] is Orion's own installer tag, replaced by an installer spoof.
+ *  A custom installer rides along as "installer=<package>". */
+fun installArgs(opts: Collection<String>, sdk: Int, owner: String): String {
+    val on = INSTALL_OPTIONS.filter { it.id in opts && sdk >= it.minSdk }.map { it.id }.toSet()
+    val custom = opts.firstOrNull { it.startsWith("installer=") }?.substringAfter('=')?.takeIf { "installer" in on && it.matches(PACKAGE) }
+    return buildString {
+        if ("restricted" !in on) append(" --restrict-permissions")
+        if (custom != null) append(" -i $custom") else if ("play" !in on) append(owner)
+        INSTALL_OPTIONS.filter { it.id in on }.forEach { o -> o.flag?.let { append(" $it") } }
     }
 }
 // endregion

@@ -1,5 +1,11 @@
 package com.orion.store.ui
 
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.LinkAnnotation
 import android.Manifest
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -335,7 +341,7 @@ fun GuardianSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Tag(r.label, r.color); u?.list?.takeIf { it.isNotEmpty() }?.let { Tag(it, Gray) }; if (!a.isSystem) Tag("User app", Gray)
                     }
-                    Text(u?.description?.takeIf { it.isNotEmpty() } ?: "No notes for this app yet. If you are not sure what it does, leave it.", style = ty.bodyMedium)
+                    u?.description?.takeIf { it.isNotEmpty() }?.let { UadNotes(it) } ?: Text("No notes for this app yet. If you are not sure what it does, leave it.", style = ty.bodyMedium)
                     Text(a.packageName, Modifier.clickable { copy(a.packageName) }, style = ty.labelSmall, fontFamily = FontFamily.Monospace, color = cs.onSurfaceVariant)
                 }
             },
@@ -344,6 +350,52 @@ fun GuardianSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismi
                     colors = if (a.isInstalled) ButtonDefaults.textButtonColors(contentColor = cs.error) else ButtonDefaults.textButtonColors()) { Text(if (a.isInstalled) "Remove" else "Restore") }
             },
             dismissButton = { TextButton({ info = null }) { Text("Close") } })
+    }
+}
+
+private val URL_RE = Regex("""https?://[^\s)\]>]+""")
+private fun site(u: String) = runCatching { java.net.URI(u).host.removePrefix("www.") }.getOrNull() ?: u
+
+/** UAD notes made readable: a short first line becomes the heading, every other line its own paragraph with in-line links shortened to their
+ *  site and tappable, and lines that are only a link gathered at the bottom as source rows. */
+@Composable
+private fun UadNotes(text: String) {
+    val cs = MaterialTheme.colorScheme; val ty = MaterialTheme.typography; val open = LocalUriHandler.current
+    val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val (sources, notes) = lines.partition { URL_RE.containsMatchIn(it) && URL_RE.replace(it, "").trim().trimEnd(':', '.').lowercase() in setOf("", "see", "source", "more info", "more") }
+    val head = notes.firstOrNull()?.takeIf { notes.size > 1 && it.length <= 48 && !it.endsWith('.') }
+    val link = TextLinkStyles(SpanStyle(color = cs.primary, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline))
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        head?.let { Text(it, style = ty.titleSmall, fontWeight = FontWeight.Bold) }
+        (if (head != null) notes.drop(1) else notes).forEach { l ->
+            Text(buildAnnotatedString {
+                var at = 0
+                URL_RE.findAll(l).forEach { m ->
+                    append(l.substring(at, m.range.first))
+                    withLink(LinkAnnotation.Url(m.value, link)) { append(site(m.value)) }
+                    at = m.range.last + 1
+                }
+                append(l.substring(at))
+            }, style = ty.bodyMedium, color = cs.onSurfaceVariant)
+        }
+        val urls = sources.flatMap { URL_RE.findAll(it).map { m -> m.value }.toList() }.distinct()
+        if (urls.isNotEmpty()) {
+            Text("Sources", Modifier.padding(top = 4.dp), style = ty.labelLarge, color = cs.primary)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                urls.forEachIndexed { i, u ->
+                    val shape = RoundedCornerShape(if (i == 0) 16.dp else 4.dp, if (i == 0) 16.dp else 4.dp, if (i == urls.lastIndex) 16.dp else 4.dp, if (i == urls.lastIndex) 16.dp else 4.dp)
+                    Row(Modifier.fillMaxWidth().clip(shape).background(cs.surfaceContainerHighest).clickable { runCatching { open.openUri(u) } }.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Sym.Link, null, Modifier.size(18.dp), tint = cs.primary); Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(site(u), style = ty.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(u.substringAfter("://").substringAfter('/', ""), style = ty.bodySmall, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Icon(Sym.OpenInNew, "Open", Modifier.size(16.dp), tint = cs.onSurfaceVariant)
+                    }
+                }
+            }
+        }
     }
 }
 

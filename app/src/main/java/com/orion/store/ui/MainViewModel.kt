@@ -28,7 +28,7 @@ import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
-import com.orion.store.MainActivity
+import com.orion.store.OrionActivity
 import com.orion.store.AutoUpdate
 import com.orion.store.data.*
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import java.io.File
 
@@ -267,7 +268,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var tour by mutableStateOf(false); var donateOpen by mutableStateOf(false); var guidePrompt by mutableStateOf(false)
     private val turns = kotlinx.coroutines.sync.Mutex()
     private val screenFree get() = startupReady && !forcedBlocking && forcedTest == null && !((config?.maintenanceMode == true || s.localMaintenanceMode) && !bypassMaintenance) &&
-        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen && !guidePrompt &&
+        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen && !donateNudge && !guidePrompt &&
         snackbar.currentSnackbarData == null
     // Polls every 400 ms: the gate mixes Compose state with the settings StateFlow. One boolean read, so it costs nothing
     private suspend fun untilFree() { while (!screenFree) delay(400) }
@@ -307,7 +308,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onResume() {
         pendingRetry?.let { (a, f) -> if (tracker.canRequestInstalls()) { pendingRetry = null; viewModelScope.launch { delay(500); installFile(a, f) } } }
         if (installingId == null && scanningId == null) scheduleInstalledSync()
-        announceQuest(); cloudBackup(); reportAutoUpdates()
+        announceQuest(); cloudBackup(); reportAutoUpdates(); leaderboardSync()
     }
 
     /** What the background updater did while Orion was closed: a quiet toast when all went well, a report when something needs the user. */
@@ -336,6 +337,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { withContext(Dispatchers.IO) { ctx.contentResolver.openOutputStream(st.cloudBackupUri.toUri(), "wt")!!.use { it.write(identityExport(st, d.favorites, now()).toByteArray()) } } }
             .onSuccess { set { it.copy(lastCloudBackup = now()) }; if (force) { toast("Identity backed up"); haptic(H.SUCCESS) } }
             .onFailure { if (force) error("Cloud backup failed. Pick the backup file again in Settings › Backup.") else if (!cloudWarned) { cloudWarned = true; queue { error("Cloud backup failed. Pick the backup file again in Settings › Backup.") } } }
+    }
+
+    /** Keeps a joined pilot's Hall of Fame entry current without the Fame Gate: at most every 2 days, and only after a level up, so the relay's free quota lasts. */
+    private fun leaderboardSync() = viewModelScope.launch {
+        val st = s; val p = st.userProfile ?: return@launch; val t = now()
+        if (st.lastLeaderboardSubmissionTime == 0L || t - st.lastLeaderboardSubmissionTime < 2 * Xp.DAY_MS) return@launch
+        val xp = Xp.total(st, d.appLibrary.size)
+        if (Xp.level(xp) <= Xp.level(st.leaderboardXp) || !(st.adWatchCount >= 5 || st.isContributor) || !Xp.plausible(st, t)) return@launch
+        val url = p.avatarUrl ?: CHARACTERS.firstOrNull { it.id == p.avatarId }?.url ?: return@launch
+        if (runCatching { postLeaderboard(st, xp, p.name, url, t) }.getOrNull()?.first in 200..299) set { it.copy(lastLeaderboardSubmissionTime = t, leaderboardXp = xp) }
     }
 
     /** Root: makes Orion the installer of catalog apps installed from elsewhere, so their updates land silently here. */
@@ -377,7 +388,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (r.config != null) { config = r.config; evaluateStoreUpdate(r.config); if (st.devConfigEnabled) devStatus = "loaded" } else clearConfigState()
             r.devError?.let { devStatus = "error"; devError = it }
             mirrorSource = r.source; primary = true
-            process(r.rawApps, r.mirror)
+            // The embedded fallback is older than any catalog already on screen
+            process(if (r.config == null && d.apps.isNotEmpty()) null else r.rawApps, r.mirror)
             if (r.config != null) CatalogCache(d.apps, r.config, r.source).let { c -> launch(Dispatchers.IO) { runCatching { repo.saveCache(c) } } }
         } catch (e: Exception) {
             if (d.apps.isEmpty()) { error("Failed to load apps"); clearConfigState(); if (st.devConfigEnabled) { devStatus = "error"; devError = e.message ?: "Failed to load developer config." }; haptic(H.ERROR) }
@@ -385,17 +397,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun process(raw: JsonElement?, mirror: JsonElement?) {
-        val m = withContext(Dispatchers.Default) { CatalogProcessor.parseMirror(mirror) }
-        // If the mirror fetch failed (empty) but we already have processed apps with
-        // download info, keep them. Overwriting with unprocessed data would mark the
-        // entire catalog unavailable and poison the disk cache.
-        if (m.isEmpty() && d.apps.any { it.availableVersions.isNotEmpty() }) {
-            loading = false; refreshing = false; scheduleInstalledSync()
-            return
+    private suspend fun process(raw: JsonElement?, mirror: Map<String, List<CatalogProcessor.Release>>?) {
+        // A load that brought no catalog at all keeps what is on screen rather than emptying the store
+        if (raw !is JsonArray && d.apps.isNotEmpty()) { loading = false; refreshing = false; scheduleInstalledSync(); return }
+        val m = mirror.orEmpty(); val imported = d.importedApps; val old = allApps()
+        // Without a mirror, apps keep their last known releases: marking every app unavailable would also poison the disk cache
+        val (apps, imp) = withContext(Dispatchers.Default) {
+            val a = CatalogProcessor.process(raw, m); val i = imported.map { CatalogProcessor.processItem(it, m) }
+            if (m.isEmpty()) CatalogProcessor.carryVersions(a, old) to CatalogProcessor.carryVersions(i, old) else a to i
         }
-        val imported = d.importedApps
-        val (apps, imp) = withContext(Dispatchers.Default) { CatalogProcessor.process(raw, m) to imported.map { CatalogProcessor.processItem(it, m) } }
         upd { it.copy(apps = apps, importedApps = imp) }
         loading = false; refreshing = false; scheduleInstalledSync()
     }
@@ -522,6 +532,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         d.readyToInstall[app.id]?.let { if (!auto) installFile(app, it); return }
         if (app.id in d.activeDownloads) { if (!auto) selectedApp = app; return }
         if (!initializing.add(app.id)) return
+        if (auto) autoIds += app.id
         if (s.directInstall && WirelessAdb.supported) WirelessAdb.warm(ctx) // connected by the time the APK lands
         try {
             val meta = downloadVersionMeta(app, url, s.streamOf(app.id))
@@ -559,13 +570,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (ok) {
             val file = d.activeDownloads[id]?.substringAfter('|') ?: return
             upd { it.completeDownload(id, file, now()) }
-            (lookup[id] ?: allApps().firstOrNull { it.id == id })?.let { installToast(it, file); notifyReady(it, file) }
+            (lookup[id] ?: allApps().firstOrNull { it.id == id })?.let { if (autoIds.remove(id) && s.autoInstall) autoInstall(it, file) else { installToast(it, file); notifyReady(it, file) } }
         } else upd { it.failDownload(id) }
         haptic(if (ok) H.SUCCESS else H.ERROR)
     }
 
+    /** Auto-updates the store downloaded while open (the background job steps aside then). */
+    private val autoIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Install automatically for an update Orion downloaded while open: the silent routes through [installFile], otherwise the
+     *  background job's no-prompt session. Whatever can't go silently stays ready with its notification. */
+    private fun autoInstall(app: AppItem, file: String) = viewModelScope.launch {
+        val st = s
+        if (st.rootMode || st.useShizuku || st.useDhizuku || st.directInstall && WirelessAdb.supported) { installFile(app, file, opts = if (st.installOptions) st.installFlags else null); return@launch }
+        val f = Downloads.file(file) ?: return@launch
+        val pkg = withContext(Dispatchers.IO) { tracker.archivePackage(f) }
+        val err = if (pkg == null) "The downloaded file is not a valid APK." else AutoUpdate.install(ctx, tracker, st, f, pkg, app.name)
+        if (err == null) beginVerify(app) else { notifyReady(app, file); toast("${app.name}: $err", 6000, "Install") { installFile(app, file) } }
+    }
+
     private fun notifyReady(app: AppItem, file: String) = runCatching {
-        val i = Intent(ctx, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("appId", app.id).putExtra("fileName", file)
+        val i = Intent(ctx, OrionActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("appId", app.id).putExtra("fileName", file)
         NotificationManagerCompat.from(ctx).notify(app.id.hashCode(), NotificationCompat.Builder(ctx, "orion_updates").setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("Download Complete").setContentText("${app.name} is ready to install.").setAutoCancel(true)
             .setContentIntent(PendingIntent.getActivity(ctx, app.id.hashCode(), i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)).build())
@@ -578,7 +603,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val nm = NotificationManagerCompat.from(ctx)
         if (!nm.areNotificationsEnabled()) { queue { toast("New mission: Chapter 2 · The Forkening", 8000, "Play") { open(Overlay.AD_DONATION) } }; return }
         nm.createNotificationChannel(NotificationChannelCompat.Builder("orion_quest", NotificationManagerCompat.IMPORTANCE_DEFAULT).setName("Fuel the Code missions").build())
-        val i = Intent(ctx, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("open", "quest")
+        val i = Intent(ctx, OrionActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("open", "quest")
         runCatching {
             nm.notify(7320, NotificationCompat.Builder(ctx, "orion_quest").setSmallIcon(com.orion.store.R.drawable.ic_launcher_monochrome)
                 .setContentTitle("New mission unlocked: The Forkening").setAutoCancel(true)
@@ -637,19 +662,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Developer page: the author, and the app page it was opened from (it closes once another app opens). */
     var devProfile by mutableStateOf<Pair<String, String?>?>(null)
 
-    fun installFile(app: AppItem, file: String, regular: Boolean = false, force: Boolean = false): kotlinx.coroutines.Job = viewModelScope.launch {
+    /** Install with options: the APK waiting on the options sheet. */
+    var installAsk by mutableStateOf<Pair<AppItem, String>?>(null)
+
+    /** [opts]: pm install options picked on the options sheet, which always installs through root or Shizuku. */
+    fun installFile(app: AppItem, file: String, regular: Boolean = false, force: Boolean = false, opts: Collection<String>? = null): kotlinx.coroutines.Job = viewModelScope.launch {
+        if (opts == null && !regular && s.installOptions) { installAsk = app to file; return@launch }
         val k = normalizePackageName(app.packageName)
         val meta = versionMetaFromFileName(app, file, s.streamOf(app.id))
         // Direct install runs as the shell user (no 24-hour wait, no "unknown apps" permission). When adbd is unreachable the
         // user picks the regular installer explicitly: silently falling back lands on the very wait this setting exists to skip.
-        val direct = !regular && !s.rootMode && s.directInstall && WirelessAdb.supported
+        val dhizuku = opts == null && !regular && !s.rootMode && s.useDhizuku
+        val direct = opts == null && !regular && !dhizuku && !s.rootMode && s.directInstall && WirelessAdb.supported
         if (direct && !WirelessAdb.connected) {
             installingId = app.id
             val err = runCatching { WirelessAdb.connect(ctx) }.exceptionOrNull()
             if (err != null) { installingId = null; toast(err.message ?: "Wireless debugging unreachable.", 8000, "Use installer") { installFile(app, file, true) }; return@launch }
         }
-        val shizuku = !regular && !direct && (s.useShizuku || s.rootMode)
-        if (!direct && !shizuku) try {
+        val shizuku = opts != null || !regular && !direct && !dhizuku && (s.useShizuku || s.rootMode)
+        if (!direct && !shizuku && !dhizuku) try {
             if (!tracker.canRequestInstalls()) {
                 error("Please allow permission and return here"); pendingRetry = app to file
                 ctx.startActivity(tracker.installSettingsIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return@launch
@@ -668,14 +699,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ?.takeIf { it.isNotBlank() && normalizePackageName(it) != k }?.let { p -> set { it.copy(resolvedPackageNames = it.resolvedPackageNames + (app.id to p)) } }
         try {
             when {
+                dhizuku -> { DhizukuBridge.install(ctx, tracker.resolve(file)); toast("Installed via Dhizuku") }
                 direct -> { WirelessAdb.install(ctx, tracker.resolve(file)); toast("Installed instantly") }
-                shizuku -> { tracker.installShizuku(file, s.updateLock); toast(if (s.rootMode) "Installed with root" else "Installed via Shizuku") }
+                shizuku -> { tracker.installShizuku(file, s.updateLock, opts.orEmpty()); toast(if (s.rootMode) "Installed with root" else "Installed via Shizuku") }
                 else -> { tracker.install(file, s.installerPreference, if (s.installerPreference == "package") s.installerPackage else ""); snackbar.currentSnackbarData?.dismiss() }
             }
             beginVerify(app)
         } catch (e: Exception) {
             val msg = e.message ?: e.toString()
-            if (!direct && !shizuku && ("INSTALL_CANCELED" in msg || "INSTALL_FAILED" in msg) && "INSTALL_FAILED_UPDATE_INCOMPATIBLE" !in msg && "INSTALL_PARSE_FAILED" !in msg) { beginVerify(app); return@launch }
+            if (!direct && !shizuku && !dhizuku && ("INSTALL_CANCELED" in msg || "INSTALL_FAILED" in msg) && "INSTALL_FAILED_UPDATE_INCOMPATIBLE" !in msg && "INSTALL_PARSE_FAILED" !in msg) { beginVerify(app); return@launch }
             installingId = null; scanningId = null; expectations -= k
             if ("CORRUPT" in msg || "PARSE_ERROR" in msg) deleteReadyFile(app, file)
             val (t, x) = installFailureText(msg, app.name); haptic(H.ERROR)
@@ -700,7 +732,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     upd { it.recordInstalled(app.id, ver, file, now()).copy(readyToInstall = it.readyToInstall - app.id, pendingCleanup = if (app.id in it.pendingCleanup) it.pendingCleanup else it.pendingCleanup + (app.id to CleanupEntry(file, now()))) }
                     if (s.deleteApk && purgeApk(app.id, file)) toast("Installed. APK deleted")
                 }
-                scanningId = null; return
+                scanningId = null; maybeNudgeDonate(); return
             }
         }
         expectations -= k; scanningId = null; delay(2200); syncInstalledApps()
@@ -758,6 +790,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (remote.isNotEmpty() || owners.isNotEmpty()) set { it.copy(lastRemoteVersions = it.lastRemoteVersions + remote, packageOwners = it.packageOwners + owners) }
     }
 
+    /** The support reminder: never before 3 apps, at most once every 10 days, and then only on a 1 in 3 chance per install, so it stays rare and unpredictable. */
+    var donateNudge by mutableStateOf(false)
+    private fun maybeNudgeDonate() {
+        val st = s
+        if (st.donateNudgeOff || d.appLibrary.size < 3 || now() - st.lastDonateNudge < 10 * Xp.DAY_MS || kotlin.random.Random.nextInt(3) != 0) return
+        set { it.copy(lastDonateNudge = now()) }
+        queue { donateNudge = true }
+    }
+
     fun scheduleInstalledSync() { if (syncJob?.isActive == true) return; syncJob = viewModelScope.launch { delay(900); runCatching { syncInstalledApps() } } }
 
     fun syncApp(app: AppItem) = viewModelScope.launch {
@@ -766,11 +807,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!inst && s.lastRemoteVersions[app.id] != null) set { it.copy(lastRemoteVersions = it.lastRemoteVersions - app.id) }
     }
 
+    /** Applies a launcher icon or dock style; a locked one points to Fuel the Code instead. */
+    fun pickCosmetic(c: Cosmetic, icon: Boolean) {
+        if (!c.unlocked(s)) {
+            haptic(H.WARNING)
+            set { it.copy(unlockTarget = c.id) }
+            toast("Ads you watch in Fuel the Code now count toward ${c.label}: ${c.progress(s)} of ${c.ads}.", 5000, "Fuel up") { open(Overlay.AD_DONATION) }
+            return
+        }
+        haptic(H.SELECTION)
+        if (!icon) { set { it.copy(navDock = c.id) }; return }
+        if (runCatching { tracker.setLauncherIcon(c.id) }.isFailure) { error("Could not change the app icon."); return }
+        set { it.copy(appIcon = c.id) }; toast("Icon changed. Your launcher may take a few seconds to show it.")
+    }
+
+    /** Asked before a silent root or Shizuku uninstall; the system prompt asks on its own. */
+    var uninstallAsk by mutableStateOf<AppItem?>(null)
+
+    /** Removes an installed catalog app without leaving Orion: silently with root or Shizuku once confirmed, otherwise through Android's prompt. */
+    fun uninstall(app: AppItem, confirmed: Boolean = false) = viewModelScope.launch {
+        val pkg = (s.resolvedPackageNames[app.id] ?: app.packageName)?.takeIf { it.isNotBlank() } ?: return@launch
+        val dhizuku = s.useDhizuku && !s.rootMode && DhizukuBridge.granted(ctx)
+        val elevated = dhizuku || (s.useShizuku || s.rootMode) && tracker.elevatedReady()
+        if (elevated && !confirmed) { uninstallAsk = app; haptic(H.WARNING); return@launch }
+        haptic(H.MEDIUM)
+        val err = runCatching { when { dhizuku -> DhizukuBridge.uninstall(ctx, pkg); elevated -> tracker.uninstallSilent(pkg); else -> tracker.uninstallPrompt(pkg) } }.exceptionOrNull()
+        if (err != null) { error(err.message ?: "Uninstall failed"); return@launch }
+        delay(300)
+        if (withContext(Dispatchers.IO) { tracker.appInfo(pkg).installed }) return@launch
+        syncApp(app).join(); toast("${app.name} uninstalled"); haptic(H.SUCCESS)
+    }
+
     fun batchInstall() = viewModelScope.launch {
-        if (!s.useShizuku && !s.directInstall && !s.rootMode) return@launch
+        if (!s.useShizuku && !s.useDhizuku && !s.directInstall && !s.rootMode) return@launch
         val ready = d.readyToInstall; if (ready.isEmpty()) return@launch
         haptic(H.HEAVY); toast("Updating ${ready.size} apps...")
-        for ((id, f) in ready) { lookup[id]?.let { installFile(it, f).join(); delay(1000) } }
+        for ((id, f) in ready) { lookup[id]?.let { installFile(it, f, opts = if (s.installOptions) s.installFlags else null).join(); delay(1000) } }
         toast("All updates completed."); haptic(H.SUCCESS)
     }
 

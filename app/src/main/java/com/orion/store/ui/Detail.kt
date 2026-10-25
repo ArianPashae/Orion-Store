@@ -22,6 +22,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -136,6 +138,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
     }
     fun report() = vm.tracker.open("mailto:${vm.config?.supportEmail ?: Defaults.SUPPORT_EMAIL}?subject=${Uri.encode("Report Issue: ${app.name}")}")
 
+    val shown = target ?: app.availableVersions.firstOrNull { it.type == s.streamOf(app.id) } ?: app.availableVersions.firstOrNull()
     val from = remember(app.id) { vm.openFrom }
     val list = rememberLazyListState()
     val scrolled by remember { derivedStateOf { list.firstVisibleItemIndex > 0 } }
@@ -154,6 +157,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                         DropdownMenu(more, { more = false }, shape = RoundedCornerShape(20.dp)) {
                             DropdownMenuItem({ Text("Request app change") }, { more = false; vm.haptic(H.LIGHT); vm.changeRequest = true }, leadingIcon = { Icon(Sym.EditNote, null) })
                             DropdownMenuItem({ Text("Report an issue") }, { more = false; vm.haptic(H.LIGHT); report() }, leadingIcon = { Icon(Sym.Flag, null) })
+                            if (installed && android) DropdownMenuItem({ Text("Uninstall") }, { more = false; vm.uninstall(app) }, leadingIcon = { Icon(Sym.Delete, null) })
                             if (installed) {
                                 val managed = isManaged(app.id, s)
                                 DropdownMenuItem({ Text(if (managed) "Don't manage with Orion" else "Manage with Orion") }, {
@@ -204,7 +208,10 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                             Main(Sym.OpenInNew, "Open", onClick = ::launch)
                             Side(Sym.SaveAlt, "Export APK to Downloads") { vm.exportApk(app, cleanup) }
                         }
-                        upToDate && android -> Main(Sym.OpenInNew, "Open", onClick = ::launch)
+                        upToDate && android -> {
+                            Side(Sym.Delete, "Uninstall") { vm.uninstall(app) }
+                            Main(Sym.OpenInNew, "Open", onClick = ::launch)
+                        }
                         else -> {
                             val (icon, label) = when {
                                 unavailable -> Sym.Block to "Currently unavailable"
@@ -267,6 +274,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                     Cell({ Icon(when (app.platform) { Platform.ANDROID -> Sym.Android; Platform.TV -> Sym.Tv; else -> Sym.DesktopWindows }, null, Modifier.size(24.dp)) }, app.platform)
                 }
             }
+            if (needsUpdate) item("new") { WhatsNew(vm, app, shown, true) }
             if (app.screenshots.isNotEmpty()) item("shots") {
                 val portrait = app.platform == Platform.ANDROID
                 LazyRow(Modifier.reveal(1).padding(top = 8.dp), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -280,18 +288,24 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                     style = MaterialTheme.typography.bodyLarge, color = cs.onSurfaceVariant, maxLines = if (open) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis)
                 if (app.description.length > 180) TextButton({ open = !open }, Modifier.padding(start = 8.dp)) { Text(if (open) "Show less" else "Read more") }
             } }
-            if (app.patches.isNotEmpty()) item("patches") { Column(Modifier.reveal(3).animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec())) {
-                var all by remember { mutableStateOf(false) }
-                val list = app.patches.sortedBy { it.length }
-                SectionTitle("Patches", Modifier.padding(top = 12.dp), "${app.patches.size} modifications applied")
-                FlowRow(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    (if (all) list else list.take(6)).forEach { p ->
-                        Surface(shape = RoundedCornerShape(12.dp), color = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer) {
-                            Text(p, Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelLarge)
+            if (!needsUpdate) item("new") { WhatsNew(vm, app, shown, false) }
+            if (app.patches.isNotEmpty()) item("patches") { Column(Modifier.reveal(3)) {
+                // Folded like App info: one row with the count, every patch name listed once opened
+                var open by rememberSaveable { mutableStateOf(false) }
+                val list = remember(app.patches) { app.patches.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER) }
+                val turn by animateFloatAsState(if (open) 180f else 0f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "chev")
+                Column(Modifier.padding(horizontal = 16.dp).padding(top = 20.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                    SegmentedListItem({ open = !open; vm.haptic(H.SELECTION) }, ListItemDefaults.segmentedShapes(0, if (open) list.size + 1 else 1),
+                        colors = ListItemDefaults.segmentedColors(containerColor = if (open) cs.tertiaryContainer else cs.surfaceContainer),
+                        leadingContent = { IconBox(Sym.Extension, cs.tertiary) }, trailingContent = { Icon(Sym.ExpandMore, if (open) "Hide patches" else "Show patches", Modifier.graphicsLayer { rotationZ = turn }) },
+                        supportingContent = { Text("${list.size} applied to this build", maxLines = 1) }) { Text("Patches", style = MaterialTheme.typography.titleMedium) }
+                    AnimatedVisibility(open, enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) + fadeIn(), exit = shrinkVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) + fadeOut()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                            list.forEachIndexed { i, p ->
+                                SegmentedListItem(ListItemDefaults.segmentedShapes(i + 1, list.size + 1), colors = ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer),
+                                    leadingContent = { Icon(Sym.Check, null, Modifier.size(20.dp), tint = cs.tertiary) }) { Text(p, style = MaterialTheme.typography.bodyLarge) }
+                            }
                         }
-                    }
-                    if (list.size > 6) Surface({ all = !all }, shape = RoundedCornerShape(12.dp), color = cs.surfaceContainerHigh) {
-                        Text(if (all) "Show less" else "+${list.size - 6} more", Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelLarge)
                     }
                 }
             } }
@@ -420,6 +434,61 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
 
     if (shareSheet) ShareLinksSheet(vm, app) { shareSheet = false }
     lightbox?.let { Lightbox(app.screenshots, it) { lightbox = null } }
+}
+
+/** The release notes of the version Download would fetch, folded into one row. Opens by itself while that version is an update. */
+@Composable
+private fun WhatsNew(vm: MainViewModel, app: AppItem, v: VersionOption?, update: Boolean) {
+    // Morphe and other patched builds: their release notes describe the build bot, not the app
+    val patched = app.patches.isNotEmpty() || listOf(app.name, app.author, app.repoUrl, app.githubRepo, app.gitlabRepo).any { "morphe" in it.orEmpty().lowercase() }
+    val tag = if (patched) "" else v?.tag.orEmpty(); val token = LocalS.current.githubToken; val cs = MaterialTheme.colorScheme
+    val notes by produceState<String?>(null, app.id, tag) { value = if (tag.isEmpty()) null else fetchReleaseNotes(app, tag, token) }
+    var open by rememberSaveable(app.id, tag) { mutableStateOf(false) }
+    val turn by animateFloatAsState(if (open) 180f else 0f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "chev")
+    AnimatedVisibility(!notes.isNullOrBlank(), enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) + fadeIn(), exit = fadeOut()) {
+        val text = notes.orEmpty()
+        Surface(Modifier.padding(horizontal = 16.dp).padding(top = if (update) 8.dp else 20.dp).fillMaxWidth().animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+            shape = RoundedCornerShape(24.dp), color = if (update) cs.tertiaryContainer else cs.surfaceContainer, contentColor = if (update) cs.onTertiaryContainer else cs.onSurface) {
+            Column {
+                Row(Modifier.fillMaxWidth().clickable { open = !open; vm.haptic(H.SELECTION) }.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconBox(Sym.NewReleases, if (update) cs.tertiary else cs.primary)
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("What's new", style = MaterialTheme.typography.titleMedium)
+                        Text(listOfNotNull(v?.version?.let { (if (update) "Update to " else "Version ") + it.removePrefix("v") }, v?.date?.ifBlank { null }).joinToString(" · "),
+                            style = MaterialTheme.typography.bodyMedium, color = LocalContentColor.current.copy(.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Icon(Sym.ExpandMore, if (open) "Hide changelog" else "Show changelog", Modifier.graphicsLayer { rotationZ = turn })
+                }
+                if (open) SelectionContainer {
+                    Text(notesText(text), Modifier.padding(start = 20.dp, end = 20.dp, bottom = 18.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodyMedium, color = LocalContentColor.current.copy(.9f))
+                }
+            }
+        }
+    }
+}
+
+private val INLINE = Regex("""\*\*(.+?)\*\*|`([^`]+)`""")
+
+/** Headings bold, **bold** and `code` styled, the markers dropped. */
+private fun notesText(t: String) = buildAnnotatedString {
+    t.lines().forEachIndexed { i, raw ->
+        if (i > 0) append('\n')
+        val h = raw.trimStart().startsWith("#")
+        val line = if (h) raw.trimStart().trimStart('#').trim() else raw
+        if (h) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(line.replace("**", "")) }
+        else INLINE.let { re ->
+            var at = 0
+            re.findAll(line).forEach { m ->
+                append(line.substring(at, m.range.first))
+                if (m.groupValues[1].isNotEmpty()) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
+                else withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(m.groupValues[2]) }
+                at = m.range.last + 1
+            }
+            append(line.substring(at))
+        }
+    }
 }
 
 /** 40dp tonal icon container for list rows. */

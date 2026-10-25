@@ -26,6 +26,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -130,11 +131,23 @@ object WirelessAdb {
             val last = prefs(ctx).getInt("port", 0)
             if (last <= 0 || !tryConnect(mg, last)) {
                 if (!onWifi(ctx)) throw NativeError("Connect to Wi-Fi to install without the wait.")
-                if (canToggle(ctx) && !wirelessOn(ctx)) runCatching { Settings.Global.putInt(ctx.contentResolver, ADB_WIFI, 1) }
-                val port = discover(ctx, AdbMdns.SERVICE_TYPE_TLS_CONNECT, 15_000)
-                    ?: throw NativeError("Wireless debugging is off. Turn it on or run the setup again.")
-                if (!tryConnect(mg, port)) throw NativeError("Wireless debugging refused Orion. Run the setup again to re-pair.")
-                prefs(ctx).edit { putInt("port", port) }
+                val cr = ctx.contentResolver; val toggle = canToggle(ctx)
+                // Like Shizuku: with WRITE_SECURE_SETTINGS, Orion brings back Developer options and Wireless debugging itself, and turns off
+                // the 7-day authorization timeout that would otherwise make Android forget the pairing
+                if (toggle) runCatching {
+                    if (!devOptions(ctx)) Settings.Global.putInt(cr, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 1)
+                    Settings.Global.putLong(cr, "adb_allowed_connection_time", 0)
+                    if (!wirelessOn(ctx)) Settings.Global.putInt(cr, ADB_WIFI, 1)
+                }
+                var port = discover(ctx, AdbMdns.SERVICE_TYPE_TLS_CONNECT, 15_000)
+                // On but silent (Wi-Fi changed, adbd stuck): restart Wireless debugging once
+                if (port == null && toggle) {
+                    runCatching { Settings.Global.putInt(cr, ADB_WIFI, 0); delay(1500); Settings.Global.putInt(cr, ADB_WIFI, 1) }
+                    port = discover(ctx, AdbMdns.SERVICE_TYPE_TLS_CONNECT, 15_000)
+                }
+                val found = port ?: throw NativeError(if (toggle) "Wireless debugging didn't start on this Wi-Fi. Open Wireless debugging once and allow this network." else "Wireless debugging is off. Turn it on or run the setup again.")
+                if (!tryConnect(mg, found)) throw NativeError("Wireless debugging refused Orion. Run the setup again to re-pair.")
+                prefs(ctx).edit { putInt("port", found) }
             }
             if (!canToggle(ctx)) runCatching { exec(mg, "pm grant ${ctx.packageName} ${Manifest.permission.WRITE_SECURE_SETTINGS}") }
         }

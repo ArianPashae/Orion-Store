@@ -15,8 +15,8 @@ android {
         applicationId = "com.orion.store"
         minSdk = 24
         targetSdk = 36
-        versionCode = 31
-        versionName = "2.3.5"
+        versionCode = 32
+        versionName = "2.4.5"
         // Phones and TVs are ARM; the x86 builds of the native libraries only served emulators
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
@@ -67,13 +67,16 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
     implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:5.5.0")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
+    implementation("io.github.iamr0s:Dhizuku-API:2.6.0")
     // Built-in wireless ADB: installs as the shell user, which skips the unverified-developer 24-hour wait
     implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
     implementation("org.conscrypt:conscrypt-android:2.7.0")
     implementation("com.unity3d.ads:unity-ads:4.21.0")
+    implementation("androidx.startup:startup-runtime:1.2.0") // starts Unity on first ad, see unityLoad
     // Orion AI on-device models (LiteRT-LM)
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.1")
     implementation("androidx.fragment:fragment:1.8.9") // unity-ads drags in fragment 1.0.0, which breaks ActivityResult APIs

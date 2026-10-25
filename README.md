@@ -59,24 +59,19 @@
 <details>
 <summary><b>🔍 Orion does not have any trackers!</b></summary>
 
-Saw a few people asking about the 5 "trackers" flagged in App Manager or TrackerControl, so wanted to clear up what those actually are.
+Saw a few people asking about "trackers" flagged in App Manager or TrackerControl, so wanted to clear up what those actually are.
 
 **What they actually are:**
 
-- App Manager flags manifest activities from libraries, not active surveillance services.
-- These are literally just the 5 internal screen renderers bundled inside the Unity Ads SDK:
-  - **`AdUnitActivity`**: standard video playback screen
-  - **`FullScreenWebViewDisplay`**: webview player for end cards and interactive screens
-  - **`AdUnitTransparentActivity`**: transparent overlay screen
-  - **`AdUnitSoftwareActivity`** and **`AdUnitTransparentSoftwareActivity`**: fallback renderers for devices that struggle with hardware acceleration
-
-It is 1 single ad library split across its rendering components, not 5 separate tracking networks.
+- Scanners flag library components by name, not active surveillance.
+- Everything flagged comes from one library, the Unity Ads SDK behind the optional "Fuel the Code" quest.
+- Since 2.4.5 Orion strips everything from it that Fuel the Code does not need: its app-start hook, its background service, and the advertising ID and ad-measurement permissions. What is left is **`FullScreenWebViewDisplay`**, the screen that plays the video you chose to watch.
 
 **How it works in Orion:**
 
-- It only ever touches memory if you explicitly tap to watch a rewarded video in the "Fuel the Code" quest for XP.
-- There are zero background services, no banner ads, and no user data collected or sent anywhere.
-- If you do not care about the rewarded XP quest, you can block all 5 of them right there in App Manager. The store will still work completely fine.
+- Unity only starts when you tap to watch a rewarded video in "Fuel the Code" for XP. It never runs at app start.
+- There are zero background services, no banner ads, and no advertising ID. Orion collects and sends no user data.
+- If you do not care about the rewarded XP quest, you can block it right there in App Manager. The store will still work completely fine.
 
 </details>
 
@@ -389,6 +384,13 @@ The project lives across a few public surfaces:
     <img src="assets/m3-divider-light.svg" alt="" width="100%">
   </picture>
 </p>
+
+## Credits
+
+- **[Install with Options](https://github.com/zacharee/InstallWithOptions)** by Zachary Wander (MIT): Orion's "Install with options" sheet is inspired by its set of install options. Orion's version is its own implementation on top of `pm install`.
+- **[Dhizuku](https://github.com/iamr0s/Dhizuku)** and the **[Dhizuku API](https://github.com/iamr0s/Dhizuku-API)** by iamr0s (MIT): device owner installs and uninstalls.
+- **[Shizuku](https://github.com/RikkaApps/Shizuku)** by RikkaApps: silent installs and the Guardian tools.
+- **[Universal Android Debloater Next Generation](https://github.com/Universal-Debloater-Alliance/universal-android-debloater-next-generation)**: the package notes and removal ratings behind Debloat.
 
 <p align="center">
   Made with 💜 by <strong>RookieZ</strong>

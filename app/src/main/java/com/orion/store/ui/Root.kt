@@ -183,31 +183,73 @@ private fun BoxScope.AiStar(vm: MainViewModel) = BoxWithConstraints(Modifier.mat
         }, dragging)
 }
 
-/** Floating pill dock: the active destination grows into an icon + label indicator; slides away while scrolling down. */
+/** The dock in the style picked in Settings (see [DOCKS]); every style slides away while scrolling down. A locked style falls back to the pill. */
 @Composable
 private fun FloatingNav(vm: MainViewModel, items: List<NavItem>, updates: Int, shown: Boolean, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme; val s = LocalS.current
+    val dock = DOCKS.firstOrNull { it.id == s.navDock && it.unlocked(s) }?.id ?: "pill"
     val drop by animateFloatAsState(if (shown) 0f else 1f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "drop")
     // Slides by its own height plus everything below it (system bar, margin, shadow), so no sliver stays on screen at any dock size or inset
     val below = WindowInsets.navigationBars.getBottom(LocalDensity.current)
+    val slide = Modifier.graphicsLayer { translationY = drop * (size.height + below + 32.dp.toPx()) }
+    if (dock == "bar") {
+        NavigationBar(modifier.then(slide), containerColor = if (s.isOled) Color.Black else cs.surfaceContainer) {
+            items.forEach { n -> NavigationBarItem(vm.tab == n.tab, { vm.navTo(n.tab) }, { NavIcon(n, vm.tab == n.tab, updates) }, label = { Text(n.label, maxLines = 1) }) }
+        }
+        return
+    }
+    if (dock == "vibrant") { ExpressiveDock(vm, items, updates, modifier.navigationBarsPadding().padding(bottom = 12.dp).then(slide)); return }
+    val oled = s.isOled
+    val color = if (oled) Color.Black else cs.surfaceContainerHigh.copy(alpha = if (s.glassEffect) .95f else 1f)
     // OLED: a pitch-black dock, set apart from the black page by a hairline outline instead of a lighter fill
-    Surface(modifier.navigationBarsPadding().padding(bottom = 12.dp).graphicsLayer { translationY = drop * (size.height + below + 32.dp.toPx()) }, shape = Pill,
-        color = if (s.isOled) Color.Black else cs.surfaceContainerHigh.copy(alpha = if (s.glassEffect) .95f else 1f), shadowElevation = 8.dp,
-        border = if (s.isOled) androidx.compose.foundation.BorderStroke(1.dp, cs.outline.copy(alpha = .5f)) else null) {
-        Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+    Surface(modifier.navigationBarsPadding().padding(bottom = 12.dp).then(slide), shape = if (dock == "labels") RoundedCornerShape(28.dp) else Pill, color = color, shadowElevation = 8.dp,
+        border = if (oled) androidx.compose.foundation.BorderStroke(1.dp, cs.outline.copy(alpha = .5f)) else null) {
+        Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(if (dock == "pill") 2.dp else 4.dp), verticalAlignment = Alignment.CenterVertically) {
             items.forEach { n ->
                 val on = vm.tab == n.tab
                 val fx = MaterialTheme.motionScheme.defaultEffectsSpec<Color>(); val sp = MaterialTheme.motionScheme.defaultSpatialSpec<androidx.compose.ui.unit.IntSize>()
-                val bg by animateColorAsState(if (on) cs.secondaryContainer else Color.Transparent, fx, label = "bg")
-                val fg by animateColorAsState(if (on) cs.onSecondaryContainer else cs.onSurfaceVariant, fx, label = "fg")
-                Row(Modifier.height(52.dp).clip(Pill).background(bg).selectable(on, role = Role.Tab) { vm.navTo(n.tab) }.padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    CompositionLocalProvider(LocalContentColor provides fg) { NavIcon(n, on, updates) }
-                    AnimatedVisibility(on, enter = expandHorizontally(sp) + fadeIn(), exit = shrinkHorizontally(sp) + fadeOut()) {
-                        Text(n.label, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
+                val (onBg, onFg, offFg) = Triple(cs.secondaryContainer, cs.onSecondaryContainer, cs.onSurfaceVariant)
+                val bg by animateColorAsState(if (on) onBg else Color.Transparent, fx, label = "bg")
+                val fg by animateColorAsState(if (on) onFg else offFg, fx, label = "fg")
+                val tap = Modifier.selectable(on, role = Role.Tab) { vm.navTo(n.tab) }
+                when (dock) {
+                    "pill" -> Row(Modifier.height(52.dp).clip(Pill).background(bg).then(tap).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CompositionLocalProvider(LocalContentColor provides fg) { NavIcon(n, on, updates) }
+                        AnimatedVisibility(on, enter = expandHorizontally(sp) + fadeIn(), exit = shrinkHorizontally(sp) + fadeOut()) {
+                            Text(n.label, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
+                        }
+                    }
+                    "labels" -> Column(Modifier.clip(RoundedCornerShape(22.dp)).then(tap).padding(horizontal = 8.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(Modifier.size(56.dp, 32.dp).clip(Pill).background(bg), contentAlignment = Alignment.Center) { CompositionLocalProvider(LocalContentColor provides fg) { NavIcon(n, on, updates) } }
+                        Text(n.label, Modifier.padding(top = 4.dp), style = if (on) MaterialTheme.typography.labelMediumEmphasized else MaterialTheme.typography.labelMedium,
+                            color = if (on) cs.onSurface else offFg, maxLines = 1)
+                    }
+                    // Each tab owns an M3 shape: picking it morphs its indicator from a circle into that shape
+                    "shapes" -> MorphBlob(listOf(MaterialShapes.Circle, DOCK_SHAPES[items.indexOf(n) % DOCK_SHAPES.size]), if (on) 1 else 0, 52.dp, bg, Modifier.clip(CircleShape).then(tap)) {
+                        CompositionLocalProvider(LocalContentColor provides fg) { NavIcon(n, on, updates) }
+                    }
+                    else -> Box(Modifier.size(52.dp).clip(CircleShape).background(bg).then(tap), contentAlignment = Alignment.Center) {
+                        CompositionLocalProvider(LocalContentColor provides fg) { NavIcon(n, on, updates) }
                     }
                 }
             }
+        }
+    }
+}
+
+private val DOCK_SHAPES = listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Clover4Leaf, MaterialShapes.Sunny, MaterialShapes.Flower, MaterialShapes.Gem, MaterialShapes.Pentagon)
+
+/** The all-Expressive dock: an M3 floating toolbar whose tabs are toggle buttons that morph from circle to rounded square when picked
+ *  and squash on press, in the toolbar's own color roles. */
+@Composable
+private fun ExpressiveDock(vm: MainViewModel, items: List<NavItem>, updates: Int, modifier: Modifier) {
+    val s = LocalS.current
+    HorizontalFloatingToolbar(true, modifier, colors = if (s.isOled) FloatingToolbarDefaults.standardFloatingToolbarColors(toolbarContainerColor = Color.Black)
+        else FloatingToolbarDefaults.standardFloatingToolbarColors()) {
+        items.forEach { n ->
+            val on = vm.tab == n.tab
+            FilledIconToggleButton(on, { vm.navTo(n.tab) }, modifier = Modifier.size(52.dp), shapes = IconButtonDefaults.toggleableShapes(),
+                colors = IconButtonDefaults.filledIconToggleButtonColors(containerColor = Color.Transparent)) { NavIcon(n, on, updates) }
         }
     }
 }
@@ -391,6 +433,14 @@ private fun Overlays(vm: MainViewModel) {
     vm.autoReport?.let { log -> AutoReportDialog(vm, log) }
     if (vm.guidePrompt) GuidePromptDialog(vm)
     vm.devProfile?.let { (dev, from) -> if (vm.selectedApp?.id == from) DevSheet(vm, dev) { vm.devProfile = null } else SideEffect { vm.devProfile = null } }
+    if (vm.donateNudge) DonateNudgeDialog(vm)
+    vm.installAsk?.let { (a, f) -> InstallOptionsSheet(vm, a, f) { vm.installAsk = null } }
+    vm.uninstallAsk?.let { a ->
+        AlertDialog({ vm.uninstallAsk = null }, icon = { Icon(Sym.Delete, null) }, title = { Text("Uninstall ${a.name}?") },
+            text = { Text("The app and all of its data will be removed from this phone.") },
+            confirmButton = { Button({ vm.uninstallAsk = null; vm.uninstall(a, true) }, shapes = ButtonDefaults.shapes()) { Text("Uninstall") } },
+            dismissButton = { TextButton({ vm.uninstallAsk = null }) { Text("Cancel") } })
+    }
     vm.installIssue?.let { i ->
         fun close() { vm.installIssue = null }
         AlertDialog(::close, icon = { Icon(Sym.ErrorOutline, null) }, title = { Text(i.title) },
@@ -401,6 +451,28 @@ private fun Overlays(vm: MainViewModel) {
             },
             dismissButton = { i.retry?.let { f -> TextButton({ close(); vm.installFile(i.app, f, force = true) }) { Text("Try anyway") } } })
     }
+}
+
+/** The occasional ask for support, shown after an install now and then (see MainViewModel.maybeNudgeDonate). */
+@Composable
+private fun DonateNudgeDialog(vm: MainViewModel) {
+    val cs = MaterialTheme.colorScheme
+    fun done(support: Boolean, never: Boolean = false) {
+        vm.donateNudge = false
+        if (never) vm.set { it.copy(donateNudgeOff = true) }
+        if (support) { vm.haptic(H.SUCCESS); vm.tab = Tab.ABOUT; vm.donateOpen = true }
+    }
+    AlertDialog({ done(false) },
+        icon = { MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Heart), 0, 64.dp, cs.tertiaryContainer) { Icon(Sym.VolunteerActivism, null, Modifier.size(30.dp), tint = cs.onTertiaryContainer) } },
+        title = { Text("Orion is one person", style = MaterialTheme.typography.headlineSmallEmphasized) },
+        text = { Text("Hey, it's RookieZ. The app, the catalog, the mirror bots, the leaderboard relay, every Morphe build and the support inbox are all made and run by me, alone. No tracking and no forced ads. If Orion saved you some time, a small donation keeps it alive.") },
+        confirmButton = { Button({ done(true) }, shapes = ButtonDefaults.shapes()) { Text("Support Orion") } },
+        dismissButton = {
+            Row {
+                TextButton({ done(false, never = true) }) { Text("Don't ask again") }
+                TextButton({ done(false) }) { Text("Maybe later") }
+            }
+        })
 }
 
 /** One-time hello for 2.2.0: points everyone at Know Orion. */

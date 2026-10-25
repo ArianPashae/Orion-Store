@@ -51,6 +51,14 @@ import kotlin.math.max
     val stableOnly: Boolean = false,
     val deleteApk: Boolean = false,
     val useShizuku: Boolean = false,
+    /** Silent installs and uninstalls through Dhizuku's shared device owner. */
+    val useDhizuku: Boolean = false,
+    /** Root or Shizuku installs open a sheet of pm install options first; [installFlags] are the ones picked last time. */
+    val installOptions: Boolean = false, val installFlags: List<String> = emptyList(),
+    /** Launcher icon and dock style, see [APP_ICONS] and [DOCKS]. */
+    val appIcon: String = "default", val navDock: String = "pill",
+    /** Ads counted toward each locked icon or dock, from zero for everyone: only ads watched while [unlockTarget] is set count. */
+    val unlockProgress: Map<String, Int> = emptyMap(), val unlockTarget: String? = null,
     /** Run every privileged action (installs, Guardian) through `su` instead of Shizuku or wireless ADB. */
     val rootMode: Boolean = false,
     /** Root installs ask Android 14+ to make other stores get consent before updating apps Orion installed. */
@@ -90,6 +98,10 @@ import kotlin.math.max
     val changeRequestCount: Int = 0,
     val lastSubmissionTime: Long = 0,
     val lastLeaderboardSubmissionTime: Long = 0,
+    /** XP on the leaderboard after the last upload; a joined pilot re-uploads by itself once a day when it grew. */
+    val leaderboardXp: Long = 0,
+    /** The occasional support reminder after installs: when it last showed, and the user's "don't ask again". */
+    val lastDonateNudge: Long = 0, val donateNudgeOff: Boolean = false,
     val useRemoteJson: Boolean = true,
     val loadLocalData: Boolean = false,
     val githubToken: String = "",
@@ -159,7 +171,9 @@ import kotlin.math.max
     fun incrementAdWatch(now: Long): Settings {
         if (adBlockReason(now) != null) return this
         val n = adWatchCount + 1
-        return copy(adWatchCount = n, isContributor = isContributor || n >= 3, isLegend = isLegend || n >= 25, adStamps = adStamps.filter { now - it < Xp.DAY_MS } + now)
+        val t = unlockTarget; val need = (APP_ICONS + DOCKS).firstOrNull { it.id == t }?.ads ?: 0; val got = (unlockProgress[t] ?: 0) + 1
+        return copy(adWatchCount = n, isContributor = isContributor || n >= 3, isLegend = isLegend || n >= 25, adStamps = adStamps.filter { now - it < Xp.DAY_MS } + now,
+            unlockProgress = if (t != null && need > 0) unlockProgress + (t to minOf(got, need)) else unlockProgress, unlockTarget = t.takeIf { need > 0 && got < need })
     }
     fun registerSubmission(now: Long) = copy(submissionCount = submissionCount + 1, lastSubmissionTime = now)
     fun registerChangeRequest(now: Long) = copy(changeRequestCount = changeRequestCount + 1, submissionCount = submissionCount + 1, lastSubmissionTime = now)

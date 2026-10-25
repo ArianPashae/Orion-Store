@@ -769,3 +769,39 @@ fun DevSheet(vm: MainViewModel, dev: String, onDismiss: () -> Unit) = OrionSheet
         itemsIndexed(apps, key = { _, a -> a.id }) { i, a -> AppRow(vm, a, i, apps.size, Modifier.animateItem()) }
     }
 }
+
+/** Install with options: pm install switches for one APK, last picks preselected. Installs through root or Shizuku. */
+@Composable
+fun InstallOptionsSheet(vm: MainViewModel, app: AppItem, file: String, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
+    val s = LocalS.current; val close = LocalSheetClose.current; val cs = MaterialTheme.colorScheme
+    val shown = remember { INSTALL_OPTIONS.filter { android.os.Build.VERSION.SDK_INT >= it.minSdk } }
+    var on by remember { mutableStateOf(s.installFlags.filterNot { it.startsWith("installer=") }.toSet()) }
+    var installer by remember { mutableStateOf(s.installFlags.firstOrNull { it.startsWith("installer=") }?.substringAfter('=').orEmpty()) }
+    SheetTitle("Install options", Sym.Tune, app.name)
+    Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+        shown.forEachIndexed { i, o ->
+            val c = o.id in on
+            fun flip() { vm.haptic(H.SELECTION); on = if (c) on - o.id else on + o.id - setOfNotNull(o.excludes) }
+            SegmentedListItem(::flip, ListItemDefaults.segmentedShapes(i, shown.size),
+                colors = ListItemDefaults.segmentedColors(containerColor = if (c) cs.secondaryContainer else cs.surfaceContainerHigh),
+                supportingContent = { Text(o.desc) },
+                trailingContent = { Switch(c, { flip() }, thumbContent = { Icon(if (c) Sym.Check else Sym.Close, null, Modifier.size(SwitchDefaults.IconSize)) }) }) {
+                Text(o.label, style = MaterialTheme.typography.titleMedium)
+            }
+            if (o.id == "installer" && c) OutlinedTextField(installer, { installer = it.trim() }, Modifier.fillMaxWidth().padding(vertical = 6.dp), singleLine = true,
+                label = { Text("Installer package") }, placeholder = { Text("com.sec.android.app.samsungapps") }, shape = RoundedCornerShape(16.dp),
+                isError = installer.isNotEmpty() && installArgs(listOf("installer", "installer=$installer"), android.os.Build.VERSION.SDK_INT, "").contains(" -i ").not(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+        }
+        Text(if (s.rootMode) "Installs with root." else "Installs through Shizuku, which has to be running.", Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        Button({
+            val picked = on.filter { id -> shown.any { it.id == id } } + listOfNotNull(installer.takeIf { "installer" in on && it.isNotEmpty() }?.let { "installer=$it" })
+            vm.set { it.copy(installFlags = picked) }
+            vm.installFile(app, file, opts = picked); close()
+        }, modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.MediumContainerHeight), shapes = ButtonDefaults.shapesFor(ButtonDefaults.MediumContainerHeight)) {
+            Icon(Sym.InstallMobile, null); Spacer(Modifier.width(10.dp)); Text("Install", style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
+        }
+    }
+}

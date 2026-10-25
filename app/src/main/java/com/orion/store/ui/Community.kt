@@ -247,6 +247,8 @@ private fun NextBoss(ads: Int) {
 
 /** Unity starts on first use: initializing at boot spun up its WebView on the main thread and hitched the first seconds. */
 private suspend fun unityLoad(ctx: Context) {
+    // Its startup hook is removed from the manifest so Unity never runs at app start; it runs here, on the first ad
+    if (!UnityAds.isInitialized) androidx.startup.AppInitializer.getInstance(ctx.applicationContext).initializeComponent(com.unity3d.services.core.configuration.AdsSdkInitializer::class.java)
     if (!UnityAds.isInitialized) suspendCancellableCoroutine { c ->
         UnityAds.initialize(ctx.applicationContext, Defaults.UNITY_GAME_ID, false, object : IUnityAdsInitializationListener {
             override fun onInitializationComplete() { if (c.isActive) c.resume(Unit) }
@@ -420,11 +422,13 @@ private val BADGE_GROUPS = listOf(
     "Fuel the Code" to QUEST_BOSSES.map { it.badge },
     "Dino Run" to DINO_BADGES.map { it.second },
     "Pilot ranks" to TIER_BADGES.map { it.second },
+    "Collections" to COSMETIC_BADGES.map { it.first },
     "Secrets" to listOf("Legend", "Dev Mode"),
 )
 private val PROFILE_BADGES = BADGE_GROUPS.flatMap { it.second }
 
-private fun badgeUnlocked(id: String, s: Settings) = QUEST_BOSSES.firstOrNull { it.badge == id }?.let { s.adWatchCount >= it.lvl } ?: when (id) {
+private fun badgeUnlocked(id: String, s: Settings) = COSMETIC_BADGES.firstOrNull { it.first == id }?.second?.all { it.unlocked(s) }
+    ?: QUEST_BOSSES.firstOrNull { it.badge == id }?.let { s.adWatchCount >= it.lvl } ?: when (id) {
     "Legend" -> s.isLegend; "Dev Mode" -> s.isDevUnlocked; else -> id in s.unlockedBadges
 }
 
@@ -432,9 +436,11 @@ private fun badgeUnlocked(id: String, s: Settings) = QUEST_BOSSES.firstOrNull { 
 private fun badgeProgress(id: String, s: Settings): Pair<Long, Long>? =
     QUEST_BOSSES.firstOrNull { it.badge == id }?.let { s.adWatchCount.toLong() to it.lvl.toLong() }
         ?: DINO_BADGES.firstOrNull { it.second == id }?.let { s.dinoHighScore to it.first }
+        ?: COSMETIC_BADGES.firstOrNull { it.first == id }?.second?.let { set -> set.sumOf { it.progress(s) }.toLong() to set.sumOf { it.ads }.toLong() }
 
 private fun badgeHint(id: String) = QUEST_BOSSES.firstOrNull { it.badge == id }?.let { "Defeat the ${it.name} in Fuel the Code. Takes ${it.lvl} ads." }
     ?: DINO_BADGES.firstOrNull { it.second == id }?.let { "Score ${it.first} in a single Dino Run." }
+    ?: when (id) { "Icon Collector" -> "Unlock the Neon and Gold app icons with Fuel the Code ads."; "Dock Master" -> "Unlock the Vibrant and Shape shift docks with Fuel the Code ads."; else -> null }
     ?: TIER_BADGES.firstOrNull { it.second == id }?.let { "Reach level ${it.first}. Every ad, app and submission earns XP." }
     ?: when (id) { "Legend" -> "Finish Chapter 1 of Fuel the Code."; "Dev Mode" -> "Some version numbers love being tapped. A lot."; else -> "" }
 
@@ -522,7 +528,7 @@ private fun PilotCard(s: Settings, name: String, avatarUrl: String, onAvatar: ()
             else Column(Modifier.fillMaxSize().padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(painterResource(com.orion.store.R.drawable.ic_splash_logo), null, Modifier.size(28.dp))
-                    Text(if (level >= 10) "ORION PILOT · ${Xp.title(level).substringBefore(' ').uppercase()}" else "ORION PILOT", Modifier.padding(start = 6.dp), style = ty.labelLarge, letterSpacing = 2.sp, fontWeight = FontWeight.Black)
+                    Text("ORION PILOT", Modifier.padding(start = 6.dp), style = ty.labelLarge, letterSpacing = 2.sp, fontWeight = FontWeight.Black)
                     Spacer(Modifier.weight(1f))
                     Surface(shape = Pill, color = on, contentColor = skin.first[0]) { Text("LV $level", Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = ty.labelLargeEmphasized) }
                 }
@@ -949,21 +955,20 @@ private fun BundleCard(title: String, desc: String, icon: String, stops: List<Co
 
 // ---------------- App submission ----------------
 
-private val CATEGORIES = listOf("Utility", "Privacy", "Media", "Development", "Social", "Educational")
 private const val KEYWORD_HELP = "1. Tap 'Check Releases Page' below.\n2. Go to the 'Assets' section of the latest version.\n3. Look at the APK filename.\n4. Copy a unique word from it.\n\nEXAMPLE:\nFile: \"app-release-arm64.apk\"\nKeyword: \"app-release\"\n\nIf the file is just \"app.apk\", simply use \"apk\"."
 private val pretty = Json { prettyPrint = true; @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class) prettyPrintIndent = "  " }
 
 private data class SubDraft(
     val mode: String, val json: String = "", val shots: List<String> = emptyList(), val oIcon: String = "", val oKeyword: String = "", val oDesc: String = "",
     val manualKeyword: Boolean = false, val name: String = "", val description: String = "", val icon: String = "", val repoUrl: String = "", val keyword: String = "apk",
-    val packageName: String = "", val category: String = "Utility", val author: String = "", val downloadUrl: String = "",
+    val packageName: String = "", val category: String = "Utility", val manualCategory: Boolean = false, val topics: List<String> = emptyList(), val author: String = "", val downloadUrl: String = "",
     val autoName: String = "", val autoDesc: String = "", val autoPkg: String = "", val autoStatus: String = "idle", val autoMsg: String = "",
 )
 
 // Note: draft lives for the process like the web's sessionStorage; persist to disk if users lose long drafts to process death.
 private var draft: SubDraft? = null
 
-private data class Detected(val name: String?, val description: String?, val packageName: String?, val author: String?)
+private data class Detected(val name: String?, val description: String?, val packageName: String?, val author: String?, val topics: List<String> = emptyList())
 
 private suspend fun detectRepo(src: RepoSource, token: String): Detected {
     val h = if (src.provider == "github" && token.isNotEmpty()) mapOf("Authorization" to "Bearer $token") else emptyMap()
@@ -980,7 +985,8 @@ private suspend fun detectRepo(src: RepoSource, token: String): Detected {
         else -> "https://codeberg.org/${src.owner}/${src.repo}/raw/branch/$branch"
     }
     val pkg = ANDROID_META_PATHS.firstNotNullOfOrNull { p -> runCatching { Net.text("$raw/$p", h) }.getOrNull()?.let(::extractPackageName) }
-    return Detected(humanizeRepoName(src.repo), desc.ifEmpty { null }, pkg, src.owner.ifEmpty { null })
+    val topics = (info["topics"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+    return Detected(humanizeRepoName(src.repo), desc.ifEmpty { null }, pkg, src.owner.ifEmpty { null }, topics)
 }
 
 private fun autofillMessage(d: Detected) = when {
@@ -1019,9 +1025,17 @@ fun SubmissionSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDis
                 name = if (d.name != null && (p.name.isEmpty() || p.name == p.autoName)) d.name else p.name,
                 description = if (d.description != null && (p.description.isEmpty() || p.description == p.autoDesc)) d.description else p.description,
                 packageName = if (d.packageName != null && (p.packageName.isEmpty() || p.packageName == p.autoPkg)) d.packageName else p.packageName,
-                autoName = d.name ?: p.autoName, autoDesc = d.description ?: p.autoDesc, autoPkg = d.packageName ?: p.autoPkg,
+                topics = d.topics, autoName = d.name ?: p.autoName, autoDesc = d.description ?: p.autoDesc, autoPkg = d.packageName ?: p.autoPkg,
                 autoStatus = if (d.packageName != null || d.description != null) "success" else "error", autoMsg = autofillMessage(d))
         }.onFailure { f = f.copy(autoStatus = "error", autoMsg = "Could not auto-detect repo metadata right now.") }
+    }
+    // Category follows the name, description and repo topics, learned from how the catalog files its apps, until the user picks one
+    val apps = vm.allApps()
+    val model by produceState<CategoryModel?>(null, apps) { value = withContext(Dispatchers.Default) { CategoryModel(apps) } }
+    LaunchedEffect(model, f.name, f.description, f.topics, f.manualCategory) {
+        val m = model ?: return@LaunchedEffect; if (f.manualCategory) return@LaunchedEffect
+        delay(350)
+        withContext(Dispatchers.Default) { m.guess("${f.name} ${f.description}", f.topics) }?.let { if (it != f.category) f = f.copy(category = it) }
     }
     val releases = f.repoUrl.trim().trimEnd('/').takeIf { it.isNotEmpty() }?.let { u ->
         when { "github.com" in u -> "$u/releases"; "gitlab" in u -> "$u/-/releases"; "codeberg.org" in u -> "$u/releases"; else -> null }
@@ -1153,9 +1167,10 @@ fun SubmissionSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDis
                 var open by remember { mutableStateOf(false) }
                 ExposedDropdownMenuBox(open, { open = it }) {
                     TextField(f.category, {}, Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable), readOnly = true, label = { Text("Category *") },
+                        supportingText = { Text(when { f.manualCategory -> "Picked by you"; f.name.isBlank() && f.description.isBlank() -> "Fills in from the details"; else -> "Detected from the details, tap to change" }) },
                         shape = RoundedCornerShape(16.dp), colors = fieldColors(), trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(open) })
                     ExposedDropdownMenu(open, { open = false }, shape = RoundedCornerShape(20.dp)) {
-                        CATEGORIES.forEach { c -> DropdownMenuItem({ Text(c) }, { f = f.copy(category = c); open = false; vm.haptic(H.SELECTION) }) }
+                        SUBMIT_CATEGORIES.forEach { c -> DropdownMenuItem({ Text(c) }, { f = f.copy(category = c, manualCategory = true); open = false; vm.haptic(H.SELECTION) }) }
                     }
                 }
                 Field(f.author, { f = f.copy(author = it) }, "Author *", "Developer or publisher")

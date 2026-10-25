@@ -25,7 +25,8 @@ val STREAMS = listOf("Stable", "Beta", "Alpha", "Nightly")
 
 @Serializable data class AppVariant(val arch: String = "", val url: String = "", val size: Long? = null)
 
-@Serializable data class VersionOption(val type: String = "Stable", val version: String = "", val date: String = "", val variants: List<AppVariant> = emptyList())
+/** [tag]: the release tag it came from, used to fetch its release notes. */
+@Serializable data class VersionOption(val type: String = "Stable", val version: String = "", val date: String = "", val variants: List<AppVariant> = emptyList(), val tag: String = "")
 
 @Serializable data class AppItem(
     val id: String = "",
@@ -105,14 +106,14 @@ object Defaults {
     const val NETWORK_TIMEOUT_MS = 8000L
     const val RELEASES_API = "https://api.github.com/repos/RookieEnough/Orion-Store/releases?per_page=8"
     const val MIRROR_JSON = "https://raw.githubusercontent.com/RookieEnough/Orion-Data/data/mirror.json"
+    /** GitHub first, then two CDNs that serve the same files for networks blocking raw.githubusercontent.com. */
     val CONFIG_URLS = listOf(
         "https://raw.githubusercontent.com/RookieEnough/Orion-Data/main/config.json",
-        "https://gitlab.com/RookieEnough/Orion-Data/-/raw/main/config.json",
-        "https://codeberg.org/RookieEnough/Orion-Data/raw/branch/main/config.json",
         "https://cdn.jsdelivr.net/gh/RookieEnough/Orion-Data@main/config.json",
+        "https://raw.githack.com/RookieEnough/Orion-Data/main/config.json",
     )
     val APPS_URLS = CONFIG_URLS.map { it.replace("config.json", "apps.json") }
-    val MIRROR_LABELS = listOf("GitHub", "GitLab", "Codeberg", "JSDelivr")
+    val MIRROR_LABELS = listOf("GitHub", "JSDelivr", "GitHack")
     val MICROG_DEPENDENT_APPS = setOf("youtube-revanced", "yt-music-revanced", "google-photos-revanced")
     const val MICROG_INFO_URL = "https://github.com/microg/GmsCore/wiki"
     val DEV_SOCIALS = SocialLinks("https://github.com/RookieEnough", "https://x.com/_Rookie_Z", "https://discord.com/invite/CrM6y4ujnq", "https://www.buymeacoffee.com/rookiez")

@@ -31,7 +31,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+class OrionActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
     private var pending: ((Int, Intent?) -> Unit)? = null
     private val results = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r -> pending?.also { pending = null }?.invoke(r.resultCode, r.data) }
@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
         ResultHost.launch = { i, cb -> pending = cb; results.launch(i) }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) { Store.settings.flow.map { it.highRefreshRate || it.perf == "boost" }.distinctUntilChanged().collect { vm.tracker.setHighRefreshRate(this@MainActivity, it) } }
+            repeatOnLifecycle(Lifecycle.State.STARTED) { Store.settings.flow.map { it.highRefreshRate || it.perf == "boost" }.distinctUntilChanged().collect { vm.tracker.setHighRefreshRate(this@OrionActivity, it) } }
         }
         if (savedInstanceState == null) handle(intent)
         setContent { OrionRoot(vm) }

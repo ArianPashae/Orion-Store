@@ -72,6 +72,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.graphics.shapes.RoundedPolygon
 import com.orion.store.data.*
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.orion.store.R
+import com.orion.store.platform.DhizukuBridge
 import com.orion.store.platform.Installer
 import com.orion.store.platform.OrionAi
 import com.orion.store.platform.WirelessAdb
@@ -434,10 +438,29 @@ fun SettingsScreen(vm: MainViewModel) {
                                     catch (e: Exception) { shizukuError = if ((e.message ?: "").contains("Shizuku is NOT running")) "Shizuku service is not running." else "Permission was denied by user." }
                                 } else vm.set { it.copy(useShizuku = !it.useShizuku) }
                             }
+                            if (android.os.Build.VERSION.SDK_INT >= 26) Toggle(Sym.AdminPanelSettings, "Dhizuku", "Silent installs and uninstalls through Dhizuku's device owner, no Shizuku or root", s.useDhizuku) {
+                                shizukuError = null
+                                if (vm.s.useDhizuku) vm.set { it.copy(useDhizuku = false) }
+                                else scope.launch {
+                                    runCatching { DhizukuBridge.request(ctx) }.onSuccess { ok -> if (ok) { vm.set { it.copy(useDhizuku = true) }; vm.haptic(H.SUCCESS) } else shizukuError = "Dhizuku permission was denied." }
+                                        .onFailure { shizukuError = it.message ?: "Dhizuku is not available." }
+                                }
+                            }
+                            Toggle(Sym.Tune, "Install with options", "Choose downgrade, permissions, Play Store install and more before each install. Uses Shizuku or root.", s.installOptions) {
+                                shizukuError = null
+                                if (!vm.s.installOptions && !vm.s.rootMode) scope.launch {
+                                    try { vm.tracker.requestElevated(); vm.set { it.copy(installOptions = true) } }
+                                    catch (e: Exception) { shizukuError = if ((e.message ?: "").contains("Shizuku is NOT running")) "Shizuku service is not running." else "Permission was denied by user." }
+                                } else vm.set { it.copy(installOptions = !it.installOptions) }
+                            }
                             shizukuError?.let { Text(it, Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.errorContainer).padding(16.dp),
                                 color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold) }
-                            InfoCard("Silent installs require Shizuku to be installed and running.") {
-                                TextButton({ vm.navigateFromSettings("shizuku") }, contentPadding = PaddingValues(0.dp)) { Text("Get Shizuku") }
+                            InfoCard("Silent installs need Shizuku running, or Dhizuku activated as device owner.") {
+                                Row {
+                                    TextButton({ vm.navigateFromSettings("shizuku") }, contentPadding = PaddingValues(0.dp)) { Text("Get Shizuku") }
+                                    Spacer(Modifier.width(16.dp))
+                                    TextButton({ vm.tracker.open(DhizukuBridge.URL) }, contentPadding = PaddingValues(0.dp)) { Text("Get Dhizuku") }
+                                }
                             }
                         }
                         Section("Root") {
@@ -472,7 +495,7 @@ fun SettingsScreen(vm: MainViewModel) {
                     }
                     "queue" -> {
                         StatHero("${active + ready + pending}", "in the queue · $active active · $ready ready · $pending updates") {
-                            if ((s.useShizuku || s.directInstall || s.rootMode) && ready > 1) Button(vm::batchInstall, shapes = ButtonDefaults.shapes()) { Icon(Sym.Bolt, null); Spacer(Modifier.width(8.dp)); Text("Update all ($ready)") }
+                            if ((s.useShizuku || s.useDhizuku || s.directInstall || s.rootMode) && ready > 1) Button(vm::batchInstall, shapes = ButtonDefaults.shapes()) { Icon(Sym.Bolt, null); Spacer(Modifier.width(8.dp)); Text("Update all ($ready)") }
                         }
                         if (active == 0 && vm.updates.isEmpty() && ready == 0) EmptyState(Sym.DownloadDone, "Queue is empty", "Downloads and updates show up here.")
                         else Section("Queue") {
@@ -535,6 +558,8 @@ fun SettingsScreen(vm: MainViewModel) {
                             Toggle(Sym.BlurOn, "Glass dock", "Slightly translucent floating navigation", s.glassEffect) { vm.set { it.copy(glassEffect = !it.glassEffect) } }
                             Toggle(Sym.Compress, "Compact mode", "Smaller rows with denser spacing", s.compactMode) { vm.set { it.copy(compactMode = !it.compactMode) } }
                         }
+                        if (!Device.isTv) IconPicker(vm, s)
+                        DockPicker(vm, s)
                         DockSize(vm, s)
                     }
                     "interface" -> {
@@ -1355,4 +1380,73 @@ private fun ScannerSheet(apps: List<AppItem>, onDismiss: () -> Unit) = OrionShee
         }
     }
     Spacer(Modifier.navigationBarsPadding().height(16.dp))
+}
+
+private val ICON_ART = mapOf(
+    "default" to (R.mipmap.ic_launcher_background to R.mipmap.ic_launcher_foreground),
+    "midnight" to (R.drawable.ic_icon_midnight_bg to R.drawable.ic_icon_midnight_fg), "sunset" to (R.drawable.ic_icon_sunset_bg to R.drawable.ic_icon_sunset_fg),
+    "ocean" to (R.drawable.ic_icon_ocean_bg to R.drawable.ic_icon_ocean_fg), "mint" to (R.drawable.ic_icon_mint_bg to R.drawable.ic_icon_mint_fg),
+    "neon" to (R.drawable.ic_icon_neon_bg to R.drawable.ic_icon_neon_fg), "gold" to (R.drawable.ic_icon_gold_bg to R.drawable.ic_icon_gold_fg),
+)
+
+/** A scrolling row of picks; locked ones carry their ad count and route to Fuel the Code. */
+@Composable
+private fun CosmeticRow(items: List<Cosmetic>, selected: String, width: androidx.compose.ui.unit.Dp, onPick: (Cosmetic) -> Unit, art: @Composable (Cosmetic) -> Unit) {
+    val s = LocalS.current; val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(cs.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.forEach { c ->
+            val on = c.id == selected; val open = c.unlocked(s)
+            val r by animateDpAsState(if (on) 28.dp else 16.dp, MaterialTheme.motionScheme.fastSpatialSpec(), label = "r")
+            Column(Modifier.width(width).springClick(RoundedCornerShape(r)) { onPick(c) }.background(if (on) cs.secondaryContainer else cs.surfaceContainerHigh).padding(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.height(64.dp).fillMaxWidth().graphicsLayer { alpha = if (open) 1f else .45f }, contentAlignment = Alignment.Center) { art(c) }
+                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (!open) { Icon(Sym.Lock, null, Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
+                    Text(c.label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                }
+                Text(when { open -> if (on) "In use" else "Tap to use"; s.unlockTarget == c.id -> "${c.progress(s)}/${c.ads} · unlocking"; else -> "${c.progress(s)}/${c.ads} ads" }, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun IconPicker(vm: MainViewModel, s: Settings) = Section("App icon") {
+    CosmeticRow(APP_ICONS, s.appIcon, 92.dp, { vm.pickCosmetic(it, true) }) { c ->
+        val (bg, fg) = ICON_ART.getValue(c.id)
+        Box(Modifier.size(56.dp).clip(CircleShape)) {
+            Image(painterResource(bg), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Image(painterResource(fg), c.label, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
+    }
+    InfoCard("Tap Neon or Gold, then watch ads in Fuel the Code: each one counts toward it. Unlock both for the Icon Collector badge.", icon = Sym.Palette)
+}
+
+/** Each dock drawn small, in its own colors and selected-item style. */
+@Composable
+private fun DockPicker(vm: MainViewModel, s: Settings) = Section("Dock style") {
+    val cs = MaterialTheme.colorScheme
+    CosmeticRow(DOCKS, s.navDock, 132.dp, { vm.pickCosmetic(it, false) }) { c ->
+        val icons = listOf(Sym.AndroidFilled, Sym.DesktopWindows, Sym.GridView, Sym.Code)
+        val (bg, fg) = cs.surfaceContainerHighest to cs.onSurfaceVariant
+        val shape = when (c.id) { "bar" -> RoundedCornerShape(4.dp); "labels" -> RoundedCornerShape(12.dp); else -> Pill }
+        Row(Modifier.fillMaxWidth().clip(shape).background(bg).padding(horizontal = 4.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            icons.forEachIndexed { i, ic ->
+                val on = i == 0
+                val (ibg, ifg, ishape) = when (c.id) {
+                    "vibrant" -> Triple(if (on) cs.primary else Color.Transparent, if (on) cs.onPrimary else fg, if (on) RoundedCornerShape(8.dp) else CircleShape)
+                    "shapes" -> Triple(if (on) cs.secondaryContainer else Color.Transparent, if (on) cs.onSecondaryContainer else fg, if (on) MaterialShapes.Cookie9Sided.toShape() else CircleShape)
+                    else -> Triple(if (on) cs.secondaryContainer else Color.Transparent, if (on) cs.onSecondaryContainer else fg, Pill)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(if (c.id == "bar" || c.id == "labels") 26.dp else 22.dp, if (c.id == "bar" || c.id == "labels") 16.dp else 22.dp).clip(ishape).background(ibg), contentAlignment = Alignment.Center) {
+                        Icon(ic, null, Modifier.size(12.dp), tint = ifg)
+                    }
+                    if (c.id == "bar" || c.id == "labels") Box(Modifier.padding(top = 2.dp).size(14.dp, 3.dp).clip(Pill).background(fg.copy(.5f)))
+                }
+            }
+        }
+    }
+    InfoCard("Tap Expressive or Shape shift, then watch ads in Fuel the Code: each one counts toward it. Unlock both for the Dock Master badge.", icon = Sym.Palette)
 }

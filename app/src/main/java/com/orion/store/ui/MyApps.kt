@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -176,7 +177,17 @@ private fun LibraryRow(vm: MainViewModel, r: MyAppRow, modifier: Modifier) {
                 action == "update" -> Primary("Update") { vm.download(r.app) }
                 action == "download" -> Primary("Download") { vm.download(r.app) }
                 action == "delete" -> IconButton({ vm.deleteLibraryApk(r.app) }) { Icon(Sym.DeleteOutline, "Delete APK") }
-                else -> Icon(Sym.ChevronRight, "Open details", tint = cs.onSurfaceVariant)
+                !r.isInstalledNow || !r.app.installsHere() -> Icon(Sym.ChevronRight, "Open details", tint = cs.onSurfaceVariant)
+            }
+            if (r.isInstalledNow && r.app.installsHere() && r.status != "downloading") Box {
+                var menu by remember { mutableStateOf(false) }
+                IconButton({ menu = true; vm.haptic(H.LIGHT) }) { Icon(Sym.MoreVert, "More options for ${r.app.name}") }
+                DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(20.dp)) {
+                    val pkg = LocalS.current.resolvedPackageNames[r.app.id] ?: r.app.packageName
+                    if (pkg != null) DropdownMenuItem({ Text("Open") }, { menu = false; runCatching { vm.tracker.launch(pkg) }.onFailure { vm.error("Could not launch app. It may be restricted.") } },
+                        leadingIcon = { Icon(Sym.OpenInNew, null) })
+                    DropdownMenuItem({ Text("Uninstall") }, { menu = false; vm.uninstall(r.app) }, leadingIcon = { Icon(Sym.Delete, null) })
+                }
             }
         }
         if (r.status == "downloading") Row(Modifier.padding(start = if (compact) 52.dp else 68.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

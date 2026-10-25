@@ -1,6 +1,10 @@
 -keepattributes *Annotation*, InnerClasses
 -keepclassmembers @kotlinx.serialization.Serializable class com.orion.store.** { *** Companion; kotlinx.serialization.KSerializer serializer(...); }
 -keep class rikka.shizuku.** { *; }
+# Dhizuku loads DhizukuService into its own process by class name
+-keep class com.rosan.dhizuku.** { *; }
+-dontwarn android.app.ActivityThread
+-keep class com.orion.store.platform.DhizukuService { <init>(android.content.Context); *; }
 # Wireless ADB: libadb looks up Conscrypt by reflection, spake2 is JNI
 -keep class org.conscrypt.** { *; }
 -keep class io.github.muntashirakon.** { *; }

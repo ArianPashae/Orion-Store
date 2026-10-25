@@ -19,6 +19,8 @@ import com.orion.store.data.*
 import com.orion.store.platform.AppTracker
 import com.orion.store.platform.DlStatus
 import com.orion.store.platform.Downloads
+import com.orion.store.platform.WirelessAdb
+import com.orion.store.platform.DhizukuBridge
 import com.orion.store.ui.Store
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -41,7 +43,7 @@ import java.util.concurrent.ConcurrentHashMap
 object AutoUpdate {
     private const val JOB_ID = 7340
     private const val CHANNEL = "orion_updates"
-    /** Set by MainActivity: while the store is on screen it handles updates itself, so the job steps aside. */
+    /** Set by OrionActivity: while the store is on screen it handles updates itself, so the job steps aside. */
     @Volatile var uiVisible = false
 
     @Suppress("DEPRECATION")
@@ -86,7 +88,7 @@ object AutoUpdate {
     private suspend fun catalog(ctx: Context, s: Settings): List<AppItem> = withContext(Dispatchers.IO) {
         val repo = Repository(ctx)
         val fresh = runCatching {
-            val r = repo.loadCatalog(s, false); val m = CatalogProcessor.parseMirror(r.mirror)
+            val r = repo.loadCatalog(s, false); val m = r.mirror.orEmpty()
             if (r.failed || m.isEmpty()) null else CatalogProcessor.process(r.rawApps, m) + Store.data.value.importedApps.map { CatalogProcessor.processItem(it, m) }
         }.getOrNull()
         fresh?.takeIf { it.isNotEmpty() } ?: (repo.cached()?.apps.orEmpty() + Store.data.value.importedApps)
@@ -125,10 +127,13 @@ object AutoUpdate {
         return result(true)
     }
 
-    /** Null on success, else why it failed, worded for the user. */
-    private suspend fun install(ctx: Context, tracker: AppTracker, s: Settings, f: File, pkg: String, name: String): String? {
+    /** Null on success, else why it failed, worded for the user. Also used by the store for auto-updates it downloads itself. */
+    suspend fun install(ctx: Context, tracker: AppTracker, s: Settings, f: File, pkg: String, name: String): String? {
         tracker.clash(f)?.let { return clashText(it.second, name).second }
-        if (s.rootMode || s.useShizuku) return runCatching { tracker.installShizuku(f.name, s.updateLock) }.exceptionOrNull()?.let { installFailureText(it.message, name).second }
+        if (s.rootMode || s.useShizuku) return runCatching { tracker.installShizuku(f.name, s.updateLock, if (s.installOptions) s.installFlags else emptyList()) }.exceptionOrNull()?.let { installFailureText(it.message, name).second }
+        if (s.useDhizuku) return runCatching { DhizukuBridge.install(ctx, f) }.exceptionOrNull()?.let { installFailureText(it.message, name).second }
+        // Skip the 24-hour wait: the same shell-user install as the button, falling back to a session when adbd is unreachable
+        if (s.directInstall && WirelessAdb.supported && runCatching { WirelessAdb.install(ctx, f) }.isSuccess) return null
         if (Build.VERSION.SDK_INT < 31) return "Android ${Build.VERSION.RELEASE} needs you to confirm installs. Root or Shizuku make them silent."
         if (!tracker.canRequestInstalls()) return "Allow Orion to install apps, then updates can install on their own."
         val (status, msg) = sessionInstall(ctx, f, pkg)
@@ -176,7 +181,7 @@ object AutoUpdate {
     /** Opens the app's page with the file ready, the same extras the store's own "ready" notification uses. */
     private fun notifyReady(ctx: Context, app: AppItem, file: String, error: String? = null) = runCatching {
         channel(ctx)
-        val i = Intent(ctx, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("appId", app.id).putExtra("fileName", file)
+        val i = Intent(ctx, OrionActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("appId", app.id).putExtra("fileName", file)
         NotificationManagerCompat.from(ctx).notify(app.id.hashCode(), NotificationCompat.Builder(ctx, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(if (error == null) "${app.name} update ready" else "${app.name} needs you").setContentText(error ?: "Tap to install.")
             .setStyle(NotificationCompat.BigTextStyle().bigText(error ?: "Tap to install.")).setAutoCancel(true)

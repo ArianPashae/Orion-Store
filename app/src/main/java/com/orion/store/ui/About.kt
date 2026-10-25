@@ -86,6 +86,7 @@ val BADGES: Map<String, Pair<ImageVector, Color>> = mapOf(
     "Dino Legend" to (Sym.LocalFireDepartment to Color(0xFFF97316)),
     "Merge Tamer" to (Sym.CallMerge to Color(0xFF14B8A6)), "Spaghetti Slayer" to (Sym.RamenDining to Color(0xFFF59E0B)),
     "Sudo Sovereign" to (Sym.Crown to Color(0xFFE11D48)),
+    "Icon Collector" to (Sym.Palette to Color(0xFF8B5CF6)), "Dock Master" to (Sym.ViewAgenda to Color(0xFF22C55E)),
     "Bronze Wings" to (Sym.MilitaryTech to Color(0xFFC07A3E)), "Silver Wings" to (Sym.MilitaryTech to Color(0xFF8F979F)), "Gold Wings" to (Sym.MilitaryTech to Color(0xFFE0A526)),
 )
 
@@ -486,6 +487,17 @@ fun leaderboardSignature(data: Map<String, Any>): String =
     MessageDigest.getInstance("SHA-256").digest((data.keys.sorted().joinToString("|") { "$it:${data[it]}" } + "ORION_OMEGA_PROTOCOL_X9_SECURE_HASH_V1").toByteArray())
         .joinToString("") { "%02x".format(it) }
 
+/** Signs and posts one leaderboard entry; (HTTP code, body). Used by the Fame Gate and the daily background refresh. */
+suspend fun postLeaderboard(s: Settings, xp: Long, name: String, avatarUrl: String, now: Long): Pair<Int, String> {
+    val payload = linkedMapOf<String, Any>("username" to name, "avatarUrl" to avatarUrl, "xp" to xp, "level" to Xp.level(xp), "adWatchCount" to s.adWatchCount,
+        "submissionCount" to s.submissionCount, "changeRequestCount" to s.changeRequestCount, "timestamp" to now)
+    val body = buildJsonObject {
+        putJsonObject("data") { payload.forEach { (k, v) -> if (v is String) put(k, v) else put(k, (v as Number).toLong()) } }
+        put("signature", leaderboardSignature(payload))
+    }.toString()
+    return Net.postJson(WORKER_URL, body)
+}
+
 @Composable
 fun LeaderboardSubmitSheet(vm: MainViewModel, onDismiss: () -> Unit) {
     val s = LocalS.current; val scope = rememberCoroutineScope(); val saved = s.userProfile
@@ -509,16 +521,10 @@ fun LeaderboardSubmitSheet(vm: MainViewModel, onDismiss: () -> Unit) {
     }
     suspend fun network() {
         val now = System.currentTimeMillis()
-        val payload = linkedMapOf<String, Any>("username" to name.trim(), "avatarUrl" to char.url, "xp" to xp, "level" to level, "adWatchCount" to s.adWatchCount,
-            "submissionCount" to s.submissionCount, "changeRequestCount" to s.changeRequestCount, "timestamp" to now)
-        val body = buildJsonObject {
-            putJsonObject("data") { payload.forEach { (k, v) -> if (v is String) put(k, v) else put(k, (v as Number).toLong()) } }
-            put("signature", leaderboardSignature(payload))
-        }.toString()
-        runCatching { Net.postJson(WORKER_URL, body) }.onFailure { status = "error"; err = it.message ?: "Unknown Error" }.onSuccess { (code, res) ->
+        runCatching { postLeaderboard(s, xp, name.trim(), char.url, now) }.onFailure { status = "error"; err = it.message ?: "Unknown Error" }.onSuccess { (code, res) ->
             if (code !in 200..299) { status = "error"; err = if (code == 429) "Whoa! You can only join once every 24 hours." else runCatching { json.parseToJsonElement(res).jsonObject["error"]!!.jsonPrimitive.content }.getOrDefault("Portal connection failed."); return }
             status = "success"
-            vm.set { it.registerSubmission(now).copy(lastLeaderboardSubmissionTime = now).withProfile(UserProfile(name.trim(), char.id, char.url), now) }
+            vm.set { it.registerSubmission(now).copy(lastLeaderboardSubmissionTime = now, leaderboardXp = xp).withProfile(UserProfile(name.trim(), char.id, char.url), now) }
         }
     }
     fun submit(sim: Boolean) {

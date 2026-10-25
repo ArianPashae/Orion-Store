@@ -96,6 +96,12 @@ class LogicTest {
         assertEquals(1, r.size); assertEquals("2.0.5", r[0].version); assertEquals("The Labyrinth Update", r[0].name); assertEquals(1_791_960_442_000L, r[0].publishedAt)
     }
 
+    @Test fun cleanNotes() {
+        val md = "## What's Changed\r\n* **Fix** crash on `start` by @dev in https://github.com/a/b/pull/3 :tada:\r\n- [x] See [docs](https://x.y)\r\n![shot](https://i.png)\r\n" +
+            "| a | b |\r\n```\r\ncode\r\n```\r\n## Fixes\r\n- Faster boot\r\n\r\n**Full Changelog**: https://github.com/a/b/compare/v1...v2\r\n## New Contributors\r\n* @x made it\r\nsha256 0123456789abcdef0123456789abcdef"
+        assertEquals("• Fix crash on start\n• See docs\n\n## Fixes\n• Faster boot", cleanNotes(md))
+    }
+
     @Test fun antiFarming() {
         val t = 1_790_000_000_000L
         // Ads: 30 s apart at least, AD_DAILY per rolling day, then nothing until the oldest falls out of the window

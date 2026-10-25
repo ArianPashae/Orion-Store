@@ -7,11 +7,15 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import com.orion.store.data.Device
+import com.orion.store.data.Net
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.orion.store.ui.Store
+import java.util.concurrent.TimeUnit
 
 class OrionApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
+        Net.init(this)
         Device.isTv = getSystemService(android.app.UiModeManager::class.java)?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION ||
             packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
         val am = getSystemService(android.app.ActivityManager::class.java)
@@ -22,6 +26,8 @@ class OrionApp : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: PlatformContext): ImageLoader {
         Store.init(this); val perf = Store.settings.value.perf
         return ImageLoader.Builder(context).crossfade(if (perf == "lite") 0 else 150)
-            .memoryCache { MemoryCache.Builder().maxSizePercent(context, when (perf) { "lite" -> .15; "boost" -> .35; else -> .25 }).build() }.build()
+            .memoryCache { MemoryCache.Builder().maxSizePercent(context, when (perf) { "lite" -> .15; "boost" -> .35; else -> .25 }).build() }
+            // Images go through Orion's DNS fallback too, without the 8 second whole-call cap that big screenshots on slow data would hit
+            .components { add(OkHttpNetworkFetcherFactory(callFactory = { Net.client.newBuilder().callTimeout(0, TimeUnit.MILLISECONDS).readTimeout(20, TimeUnit.SECONDS).build() })) }.build()
     }
 }
