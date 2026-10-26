@@ -147,7 +147,7 @@ fun AboutTab(vm: MainViewModel, padding: PaddingValues) {
     val ads = s.adWatchCount
     val (rankLabel, rankIcon) = QUEST_BOSSES.lastOrNull { ads >= it.lvl }?.let { "Rank: ${it.rank}" to (BADGES[it.badge]?.first ?: Sym.Shield) } ?: ("Start your journey" to Sym.RocketLaunch)
     val slots = s.showcasedBadges.take(3)
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+    LazyColumn(Modifier.fillMaxSize().readableWidth(), contentPadding = padding) {
         item("header") { Header(vm) }
         item("hero") {
             Column(Modifier.fillMaxWidth().padding(top = 8.dp).reveal(0), horizontalAlignment = Alignment.CenterHorizontally) {

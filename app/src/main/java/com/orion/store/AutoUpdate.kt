@@ -99,7 +99,9 @@ object AutoUpdate {
         val pkg = s.resolvedPackageNames[app.id] ?: app.packageName.orEmpty()
         val version = downloadVersionMeta(app, null, s.streamOf(app.id)).first
         fun result(ok: Boolean, error: String? = null) = AutoResult(app.id, app.name, version, ok, error, System.currentTimeMillis())
-        val url = sanitizeDownloadUrl(app.variants.firstOrNull()?.url ?: app.downloadUrl)
+        // The build of the app's own channel: a Beta user gets the next Beta, not the Stable APK under a Beta version
+        val variants = app.availableVersions.firstOrNull { it.version == version }?.variants?.ifEmpty { null } ?: app.variants
+        val url = sanitizeDownloadUrl(variants.firstOrNull()?.url ?: app.downloadUrl)
         if (url == "#" || !url.startsWith("http")) return result(false, "No direct APK download for this app.")
         val name = apkFileName(app, version)
         val f = Downloads.file(name) ?: return result(false, "Invalid file name.")
@@ -121,7 +123,7 @@ object AutoUpdate {
         if (error != null) { notifyReady(ctx, app, name, error); return result(false, error) }
         val ver = tracker.appInfo(actual).version
         Store.settings.update { it.copy(installedVersions = it.installedVersions + (app.id to ver), lastRemoteVersions = it.lastRemoteVersions + (app.id to ver),
-            packageOwners = it.packageOwners + (normalizePackageName(actual) to app.id)) }
+            installedBuilds = it.installedBuilds + (app.id to InstalledBuild(ver, version)), packageOwners = it.packageOwners + (normalizePackageName(actual) to app.id)) }
         Store.data.update { it.recordInstalled(app.id, ver, null, now).copy(readyToInstall = it.readyToInstall - app.id) }
         f.delete()
         return result(true)

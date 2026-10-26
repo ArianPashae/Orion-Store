@@ -44,7 +44,27 @@ fun preferredVersion(app: AppItem, stream: String = "Stable"): String {
     return app.availableVersions.firstOrNull()?.version ?: app.latestVersion
 }
 
-fun hasAvailableUpdate(app: AppItem, installed: String?, stream: String = "Stable") = !installed.isNullOrEmpty() && compareVersions(preferredVersion(app, stream), installed) > 0
+/** The catalog version the installed build stands for. A Beta or Nightly often names itself differently from its release
+ *  (1.4.2 on the phone, 20261020 or 1.5.0-beta3 in the catalog), so the build Orion installed is matched by its recorded offer first, then by an exact name. */
+fun installedAs(app: AppItem, installed: String, build: InstalledBuild?): VersionOption? {
+    build?.takeIf { it.versionName == installed }?.let { b -> app.availableVersions.firstOrNull { it.version == b.offered }?.let { return it } }
+    val raw = installed.lowercase().removePrefix("v")
+    return app.availableVersions.firstOrNull { it.version.lowercase().removePrefix("v") == raw }
+}
+
+fun hasAvailableUpdate(app: AppItem, installed: String?, stream: String = "Stable", build: InstalledBuild? = null): Boolean {
+    if (installed.isNullOrEmpty()) return false
+    val offer = preferredVersion(app, stream)
+    val known = installedAs(app, installed, build) ?: build?.takeIf { it.versionName == installed }?.let { VersionOption(stream, it.offered, "", emptyList()) }
+    if (known != null) {
+        if (known.version == offer) return false
+        // Same catalog naming on both sides: newer only when it really is; otherwise a different release of the same channel is an update
+        val c = compareVersions(offer, known.version)
+        return if (isComparableVersion(offer) && isComparableVersion(known.version) && normalizeVersion(offer) != normalizeVersion(known.version)) c > 0
+            else app.availableVersions.firstOrNull { it.version == offer }?.type == known.type
+    }
+    return compareVersions(offer, installed) > 0
+}
 
 fun isUpdateIgnored(app: AppItem, s: Settings, now: Long): Boolean {
     val ig = s.ignoredUpdates[app.id] ?: return false
@@ -66,7 +86,7 @@ fun isManaged(id: String, s: Settings) = s.appManage[id] ?: !(s.skipOtherStores 
 
 fun availableUpdates(apps: List<AppItem>, s: Settings, now: Long) = apps.filter { a ->
     val inst = s.installedVersions[a.id]
-    !inst.isNullOrEmpty() && isManaged(a.id, s) && hasAvailableUpdate(a, inst, s.streamOf(a.id)) && !isUpdateIgnored(a, s, now)
+    !inst.isNullOrEmpty() && isManaged(a.id, s) && hasAvailableUpdate(a, inst, s.streamOf(a.id), s.installedBuilds[a.id]) && !isUpdateIgnored(a, s, now)
 }
 // endregion
 
@@ -123,7 +143,8 @@ object Share {
     const val BADGE_BASE = "https://rookieenough.github.io/Orion-Data"
     const val BADGE_IMG = "https://raw.githubusercontent.com/RookieEnough/Orion-Store/refs/heads/main/assets/orion-badge.png"
     fun deepLink(id: String) = "orionstore://app/${enc(id)}"
-    fun webLink(id: String, icon: String?) = "$BADGE_BASE/redirect.html?id=${enc(id)}" + (icon?.trim()?.takeIf { it.isNotEmpty() }?.let { "&icon=${enc(it)}" } ?: "")
+    /** Short and clean: the page reads only the id. redirect.html stays up for old links. */
+    fun webLink(id: String) = "$BADGE_BASE/app/?id=${enc(id)}"
     fun markdown(web: String) = "[![Get it on Orion Store]($BADGE_IMG)]($web)"
     fun html(web: String) = "<a href=\"$web\">\n  <img src=\"$BADGE_IMG\" alt=\"Get it on Orion Store\" height=\"60\">\n</a>"
 }

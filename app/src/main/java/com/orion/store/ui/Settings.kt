@@ -110,7 +110,7 @@ fun identityExport(s: Settings, favorites: List<String>, now: Long): String {
         put("isLegend", s.isLegend); put("isContributor", s.isContributor); put("isDevUnlocked", s.isDevUnlocked)
         put("theme", s.theme); put("palette", s.palette); put("appFont", s.appFont); put("customFonts", json.encodeToJsonElement(s.customFonts)); put("customPalettes", json.encodeToJsonElement(s.customPalettes)); put("storeLayout", s.storeLayout)
         put("isOled", s.isOled); put("hiddenTabs", json.encodeToJsonElement(s.hiddenTabs)); put("disableAnimations", s.disableAnimations)
-        put("compactMode", s.compactMode); put("showAppAbout", s.showAppAbout); put("bottomNavScale", jsNum(s.bottomNavScale)); put("highRefreshRate", s.highRefreshRate); put("perfMode", s.perfMode)
+        put("compactMode", s.compactMode); put("showAppAbout", s.showAppAbout); put("bottomNavScale", jsNum(s.bottomNavScale)); put("highRefreshRate", s.highRefreshRate); put("immersive", s.immersive); put("perfMode", s.perfMode)
         put("pullToRefreshCharacter", s.pullToRefreshCharacter); put("hapticEnabled", s.hapticEnabled); put("glassEffect", s.glassEffect)
         put("quickTiles", s.quickTiles?.let { json.encodeToJsonElement(it) } ?: JsonNull); put("settingsOrder", json.encodeToJsonElement(s.settingsOrder))
         put("autoUpdateEnabled", s.autoUpdateEnabled); put("wifiOnly", s.wifiOnly); put("stableOnly", s.stableOnly); put("deleteApk", s.deleteApk); put("useShizuku", s.useShizuku)
@@ -159,7 +159,7 @@ fun mergeIdentity(d: JsonObject, c: Settings): Settings =
         storeLayout = d.or("storeLayout", c.storeLayout), isOled = d.or("isOled", c.isOled), hiddenTabs = d.or("hiddenTabs", c.hiddenTabs),
         disableAnimations = d.or("disableAnimations", c.disableAnimations), compactMode = d.or("compactMode", c.compactMode), showAppAbout = d.or("showAppAbout", c.showAppAbout),
         bottomNavScale = d.or("bottomNavScale", c.bottomNavScale).takeIf { it.isFinite() } ?: c.bottomNavScale,
-        highRefreshRate = d.or("highRefreshRate", c.highRefreshRate), perfMode = d.or("perfMode", c.perfMode), pullToRefreshCharacter = d.or("pullToRefreshCharacter", c.pullToRefreshCharacter),
+        highRefreshRate = d.or("highRefreshRate", c.highRefreshRate), immersive = d.or("immersive", c.immersive), perfMode = d.or("perfMode", c.perfMode), pullToRefreshCharacter = d.or("pullToRefreshCharacter", c.pullToRefreshCharacter),
         hapticEnabled = d.or("hapticEnabled", c.hapticEnabled), glassEffect = d.or("glassEffect", c.glassEffect),
         quickTiles = d.or("quickTiles", c.quickTiles), settingsOrder = d.or("settingsOrder", c.settingsOrder),
         autoUpdateEnabled = d.or("autoUpdateEnabled", c.autoUpdateEnabled), wifiOnly = d.or("wifiOnly", c.wifiOnly), stableOnly = d.or("stableOnly", c.stableOnly), deleteApk = d.or("deleteApk", c.deleteApk),
@@ -428,6 +428,10 @@ fun SettingsScreen(vm: MainViewModel) {
                             SRow(Sym.Android, "APK installer", when (s.installerPreference) {
                                 "package" -> s.installerLabel.ifEmpty { "Specific Installer" }; "chooser" -> "Ask Every Time"; else -> "System Installer"
                             }, onClick = { installerStep = "mode"; picker = "installer" }) { Chevron() }
+                            // Orion is also an installer: any APK from a file manager or browser opens on Orion's sheet
+                            SRow(Sym.InstallMobile, "Install an APK file", "Pick any APK on this phone and install it with Orion", onClick = {
+                                vm.haptic(H.LIGHT); vm.pickApk()
+                            }) { Chevron() }
                             if (WirelessAdb.supported) Toggle(Sym.Speed, "Skip the 24-hour wait", "Install instantly through built-in wireless debugging", s.directInstall) {
                                 if (vm.s.directInstall) vm.set { it.copy(directInstall = false) } else { picker = "direct" }
                             }
@@ -556,6 +560,7 @@ fun SettingsScreen(vm: MainViewModel) {
                             Toggle(Sym.Speed, "Smooth motion", "Prefer high refresh rate scrolling", s.highRefreshRate) { vm.set { it.copy(highRefreshRate = !it.highRefreshRate) } }
                             Toggle(Sym.MotionPhotosOff, "Disable animations", "Every transition snaps instantly", s.disableAnimations) { vm.set { it.copy(disableAnimations = !it.disableAnimations) } }
                             Toggle(Sym.BlurOn, "Glass dock", "Slightly translucent floating navigation", s.glassEffect) { vm.set { it.copy(glassEffect = !it.glassEffect) } }
+                            Toggle(Sym.OpenInFull, "Full screen", "Hide the status bar while Orion is open. Swipe down from the top to peek it", s.immersive) { vm.set { it.copy(immersive = !it.immersive) } }
                             Toggle(Sym.Compress, "Compact mode", "Smaller rows with denser spacing", s.compactMode) { vm.set { it.copy(compactMode = !it.compactMode) } }
                         }
                         if (!Device.isTv) IconPicker(vm, s)
@@ -587,6 +592,8 @@ fun SettingsScreen(vm: MainViewModel) {
                             Toggle(Sym.Construction, "Local maintenance mode", "Work on bundles and data locally", s.localMaintenanceMode) {
                                 vm.set { it.copy(localMaintenanceMode = !it.localMaintenanceMode) }
                             }
+                            SRow(Sym.Shield, "Test sideloading protection", "Play the Secure me popup with a fake success. Nothing on the phone changes", onClick = { vm.haptic(H.LIGHT); vm.testVerifier("done") }) { Chevron() }
+                            SRow(Sym.GppMaybe, "Test sideloading protection failure", "The same popup ending in a fake error, to check Try again", onClick = { vm.haptic(H.LIGHT); vm.testVerifier("failed") }) { Chevron() }
                             SRow(Sym.Radar, "Run catalog scanner (Admin)", "Check every app for missing text and dead links", onClick = { modal = "scanner" }) { Chevron() }
                             SRow(Sym.DeleteSweep, "Clear system cache", "Reset pending cleanup and ready installs", onClick = {
                                 vm.upd { it.copy(pendingCleanup = emptyMap(), readyToInstall = emptyMap()) }; vm.haptic(H.WARNING)
@@ -669,7 +676,7 @@ private fun PageFooter(cat: Cat) {
 private fun Hub(vm: MainViewModel, s: Settings, d: DataState, active: Int, ready: Int, pending: Int, shared: @Composable (Cat) -> Modifier) {
     val cs = MaterialTheme.colorScheme
     fun cat(id: String) = CATS.first { it.id == id }
-    Column(Modifier.fillMaxSize().background(cs.surface).verticalScroll(rememberScrollState()).readableWidth().windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 32.dp)) {
+    Column(Modifier.fillMaxSize().background(cs.surface).readableWidth().verticalScroll(rememberScrollState()).readableWidth().windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 32.dp)) {
         Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp)) {
             Text("Settings", style = MaterialTheme.typography.displaySmallEmphasized)
             Text("Orion Store v$STORE_VERSION · ${vm.allApps().size} apps in catalog", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
@@ -885,7 +892,7 @@ private fun Page(cat: Cat, modifier: Modifier, onBack: () -> Unit, content: @Com
     CompositionLocalProvider(LocalAccent provides cat.color) {
         val screen = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
         // At least a screen tall, so the footer settles at the bottom of short pages (weight works once the scroll column has a min height).
-        Column(modifier.fillMaxSize().background(cs.surface).verticalScroll(rememberScrollState()).readableWidth().heightIn(min = screen).padding(bottom = 40.dp)) {
+        Column(modifier.fillMaxSize().background(cs.surface).readableWidth().verticalScroll(rememberScrollState()).readableWidth().heightIn(min = screen).padding(bottom = 40.dp)) {
             Box(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(bg, cs.surface)))) {
                 Spinner(cat.shape, fg.copy(.08f), 260.dp, Modifier.align(Alignment.TopEnd).offset(70.dp, (-30).dp), periodMs = 40_000)
                 Column(Modifier.windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 12.dp)) {

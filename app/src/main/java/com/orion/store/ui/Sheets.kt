@@ -475,7 +475,7 @@ fun VirusTotalSheet(vm: MainViewModel, app: AppItem, onDismiss: () -> Unit) = Or
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (pg < MOD_PAGES.size) ModWarning(pg) { page++; vm.haptic(H.SELECTION) }
             else when (view) {
-                VtView.KEY -> VtKey(vm, vt, s.virusTotalApiKey, ::revoke)
+                VtView.KEY -> VtKey(vt, s.virusTotalApiKey, ::revoke, { k -> vm.set { it.copy(virusTotalApiKey = k) } }, vm::hapticStr, vm.tracker::open)
                 VtView.READY -> VtReady(target, s.virusTotalApiKey, ::scan, ::revoke)
                 VtView.SCANNING -> VtScanning(vt)
                 VtView.RESULTS -> vt.result?.let { r ->
@@ -486,6 +486,25 @@ fun VirusTotalSheet(vm: MainViewModel, app: AppItem, onDismiss: () -> Unit) = Or
                     CtaButton("Scan again", { vt.reset(); vt.view = if (s.virusTotalApiKey.isNotEmpty()) VtView.READY else VtView.KEY }, icon = Sym.Refresh, tonal = true)
                     TextButton(::revoke, Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColors(contentColor = cs.error)) { Text("Revoke Key") }
                 }
+            }
+        }
+    }
+}
+
+/** The VirusTotal flow without a sheet around it, for the APK installer: key, ready, scanning, results and errors. */
+@Composable
+fun VtPanel(vt: VtScan, target: ScanTarget, key: String, save: (String) -> Unit, revoke: () -> Unit, open: (String) -> Unit, onDone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    fun scan() { scope.launch { vt.start(target, key, {}) } }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        when (vt.view) {
+            VtView.KEY -> VtKey(vt, key, revoke, save, {}, open)
+            VtView.READY -> VtReady(target, key, ::scan, revoke)
+            VtView.SCANNING -> VtScanning(vt)
+            VtView.RESULTS -> vt.result?.let { r -> VtResults(r, onCopy = {}, onReport = { r.permalink?.let(open) }, onAgain = { vt.reset(); vt.view = VtView.READY }, onClose = onDone) }
+            VtView.ERROR -> {
+                Lead("Needs attention", vt.error.ifEmpty { "Something went wrong." }, "Scan stopped", cs.error) { Blob(Sym.ErrorOutline, cs.error, 72, MaterialShapes.Cookie7Sided) }
+                CtaButton("Scan again", { vt.reset(); vt.view = if (key.isNotEmpty()) VtView.READY else VtView.KEY }, icon = Sym.Refresh, tonal = true)
             }
         }
     }
@@ -502,7 +521,7 @@ private fun ModWarning(page: Int, onNext: () -> Unit) {
 }
 
 @Composable
-private fun VtKey(vm: MainViewModel, vt: VtScan, saved: String, revoke: () -> Unit) {
+private fun VtKey(vt: VtScan, saved: String, revoke: () -> Unit, save: (String) -> Unit, haptic: (String) -> Unit, open: (String) -> Unit) {
     var key by rememberSaveable { mutableStateOf(saved) }; var show by remember { mutableStateOf(false) }; var err by remember { mutableStateOf("") }
     Lead("Connect VirusTotal", "Your key stays on this device. Orion uses it only when you start a scan.", "BYOK setup")
     OutlinedTextField(key, { key = it; err = "" }, Modifier.fillMaxWidth(), label = { Text("API Key") }, placeholder = { Text("Paste your VirusTotal API key") },
@@ -511,12 +530,12 @@ private fun VtKey(vm: MainViewModel, vt: VtScan, saved: String, revoke: () -> Un
         leadingIcon = { Icon(Sym.Key, null) },
         trailingIcon = { IconButton({ show = !show }) { Icon(if (show) Sym.VisibilityOff else Sym.Visibility, if (show) "Hide key" else "Show key") } })
     CtaButton("Save Key", {
-        if (key.isBlank()) { err = "Paste your VirusTotal API key first."; vm.haptic(H.ERROR) }
-        else { vm.set { it.copy(virusTotalApiKey = key.trim()) }; vt.view = VtView.READY; vm.haptic(H.SUCCESS) }
+        if (key.isBlank()) { err = "Paste your VirusTotal API key first."; haptic("error") }
+        else { save(key.trim()); vt.view = VtView.READY; haptic("success") }
     }, icon = Sym.Save)
     if (saved.isNotEmpty()) TextButton(revoke, Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColors(contentColor = cs.error)) { Text("Remove Saved Key") }
     Column {
-        GroupItem(0, 2, onClick = { vm.tracker.open(VT_KEY_TUTORIAL) }) {
+        GroupItem(0, 2, onClick = { open(VT_KEY_TUTORIAL) }) {
             ListItem({ Text("Watch key tutorial", fontWeight = FontWeight.SemiBold) }, supportingContent = { Text("Quick help for finding your VirusTotal key.") },
                 leadingContent = { Blob(Sym.PlayCircle, Red, 40) }, trailingContent = { Icon(Sym.OpenInNew, null) },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent))

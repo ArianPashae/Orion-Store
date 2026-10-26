@@ -230,7 +230,7 @@ fun cardState(app: AppItem): Pair<CardState, Float> {
     return when {
         app.id in d.activeDownloads -> CardState.DOWNLOADING to (d.downloadProgress[app.id] ?: 0f)
         app.id in d.readyToInstall -> CardState.READY to 1f
-        hasAvailableUpdate(app, local, s.streamOf(app.id)) -> CardState.UPDATE to 0f
+        hasAvailableUpdate(app, local, s.streamOf(app.id), s.installedBuilds[app.id]) -> CardState.UPDATE to 0f
         !local.isNullOrEmpty() -> CardState.INSTALLED to 0f
         else -> CardState.NONE to 0f
     }

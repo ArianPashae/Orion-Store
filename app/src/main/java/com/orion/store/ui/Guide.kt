@@ -54,6 +54,7 @@ private val CHAPTERS = listOf(
         Feature(Sym.AutoAwesome, "Recommended for you", "A swipeable carousel of daily picks, plus a numbered spotlight chart of curated apps."),
         Feature(Sym.NewReleases, "New and updated", "The latest additions and refreshed apps in their own lane, with a full list one tap away."),
         Feature(Sym.Category, "Category shelves", "Expressive category blobs and lanes like Media, Social, Privacy and Utilities, each with an app count."),
+        Feature(Sym.StarRate, "Most popular and Hidden gems", "Two charts after the bundles rank apps by their GitHub stars: the most starred, and the least starred ones worth a look. Stars come with the catalog, so they cost no GitHub requests."),
         Feature(Sym.Layers, "App bundles", "Curated folders of apps that belong together. Open one to see every app, add or remove apps and install them one by one."),
         Feature(Sym.LibraryAdd, "Your own bundles", "Build a bundle in three steps: pick apps, give it a name, color and icon, then keep it local or submit it for everyone.", { open(Overlay.CUSTOM_BUNDLE) }),
         Feature(Sym.AutoAwesome, "Orion AI", "Tap the star and describe what you need, like a free music app. Use your own Gemini, ChatGPT or Claude key, or a model that runs on the phone. Drag the star anywhere.", { open(Overlay.AI) }),
@@ -71,10 +72,11 @@ private val CHAPTERS = listOf(
     Chapter("page", "App Pages", "Everything about one app, and every way to get it.", Sym.Info, Color(0xFF0EA5E9), MaterialShapes.Sunny, listOf(
         Feature(Sym.Download, "One-tap install", "Download, install, update or open an app from its page. Progress wraps the icon while it downloads."),
         Feature(Sym.Image, "Screenshots", "Scroll through screenshots at their real shape and tap one to view it full screen."),
-        Feature(Sym.History, "Versions and channels", "Pick Stable, Beta, Alpha or Nightly per app, or choose an exact older version from the version list."),
+        Feature(Sym.History, "Versions and channels", "Pick Stable, Beta, Alpha or Nightly per app, or choose an exact older version. Install a Beta or Nightly and its updates follow that channel, so it no longer shows the Stable build as an update."),
         Feature(Sym.Memory, "Right build for your phone", "Orion picks the APK that matches your phone's processor, and lets you choose another architecture yourself."),
+        Feature(Sym.Star, "GitHub stars", "Apps hosted on GitHub show their star count right under the developer name."),
         Feature(Sym.Info, "App info", "Developer, size, package name and source, folded away until you want them."),
-        Feature(Sym.NewReleases, "What's new", "The release notes of the version you would download, cleaned up and folded into one row. It sits right under the stats when an update is waiting."),
+        Feature(Sym.NewReleases, "What's new", "The release notes of the version you would download, folded into one row below About. The row shows right away and the notes load in the background, also when an update is waiting."),
         Feature(Sym.Extension, "Patches", "Modded builds list every patch applied to them in one folding row."),
         Feature(Sym.Delete, "Uninstall", "Remove an installed app from its page or from My Apps without leaving Orion. Silent with root, Shizuku or Dhizuku."),
         Feature(Sym.Policy, "VirusTotal scan", "Check a download, an installed APK or the release file against 70+ antivirus engines with your own free key."),
@@ -83,7 +85,7 @@ private val CHAPTERS = listOf(
         Feature(Sym.VisibilityOff, "Don't manage an app", "Keep an app you update elsewhere out of My Apps and updates from its ⋮ menu, or skip every app from other stores in Settings. Bring them back under Not managed."),
         Feature(Sym.Person, "Developer page", "Tap the developer's name on an app page to see every app they have in Orion."),
         Feature(Sym.SaveAlt, "Export and redownload", "Save the APK to your Downloads folder, fetch it again, or delete a saved copy to free space."),
-        Feature(Sym.Share, "Share links and badges", "Copy a deep link that opens the app straight in Orion, a web link, or a Markdown or HTML badge for your README."),
+        Feature(Sym.Share, "Share links and badges", "Share a short web link (rookieenough.github.io/Orion-Data/app/?id=...) that opens the app in Orion, a deep link, or a Markdown or HTML badge for your README."),
         Feature(Sym.EditNote, "Request a change", "Spotted a wrong icon, dead link or old description? Send a correction for exactly that field."),
         Feature(Sym.Report, "Report an issue", "A download broken? Report it from the app page and the details are filled in for you."),
         Feature(Sym.Extension, "MicroG helper", "Apps that need MicroG say so, with a link to install it and a guide to learn more."),
@@ -91,6 +93,7 @@ private val CHAPTERS = listOf(
     )),
     Chapter("library", "My Apps and Downloads", "Your library, your queue and updates that look after themselves.", Sym.GridView, Color(0xFF22C55E), MaterialShapes.Clover4Leaf, listOf(
         Feature(Sym.Inventory2, "Library", "Every app you have downloaded or installed through Orion, filtered by All, Installed, Downloaded and Updates, with its own search.", { navTo(Tab.MYAPPS) }),
+        Feature(Sym.Delete, "Uninstall several apps", "Long-press an installed app in My Apps to start picking, tap more (or All), then Uninstall. Silent with root, Shizuku or Dhizuku, one system prompt each otherwise."),
         Feature(Sym.Downloading, "Download queue", "Active downloads, ready installs and pending updates in one place, with Update all when installs can run silently.", settings("queue")),
         Feature(Sym.Notifications, "Background downloads", "Downloads keep going when you leave Orion, with live progress in your notifications and a tap to install when they finish."),
         Feature(Sym.Autorenew, "Auto-update", "Orion checks for updates every few hours, even when closed and after a reboot, and downloads them for you.", settings("network")),
@@ -102,6 +105,8 @@ private val CHAPTERS = listOf(
     Chapter("install", "Installing, Your Way", "From one-tap installs to fully silent updates.", Sym.InstallMobile, Color(0xFFF97316), MaterialShapes.Gem, listOf(
         Feature(Sym.Android, "Choose your installer", "Use the system installer, pick one every time, or always hand APKs to a specific installer app.", settings("installer")),
         Feature(Sym.Speed, "Skip the 24-hour wait", "Built-in wireless debugging installs apps instantly as the shell user, set up once with a few guided steps. Orion turns Wireless debugging back on by itself when it is off.", settings("installer")),
+        Feature(Sym.InstallMobile, "Install any APK", "Orion is an APK installer too: open an APK in your file manager or browser and pick Install with Orion, or use Install an APK file in Settings. A sheet shows the app, its version and what is installed, can scan the file with your VirusTotal key, and installs through root, Shizuku, Dhizuku or wireless debugging, skipping the 24-hour wait.", settings("installer")),
+        Feature(Sym.Shield, "Developer verification guard", "When Android switches on its developer verification component, which can slow down or block sideloaded apps, Orion offers Secure me: one tap turns it off through root, Shizuku or wireless debugging. It is reversible and only shows while the component is active."),
         Feature(Sym.Bolt, "Silent installs with Shizuku", "With Shizuku running, installs and updates go through without a prompt each time.", settings("installer")),
         Feature(Sym.AdminPanelSettings, "Dhizuku", "Silent installs, updates and uninstalls through Dhizuku's shared device owner, with no Shizuku or root. Android 8 and up.", settings("installer")),
         Feature(Sym.Tune, "Install with options", "Before each root or Shizuku install, pick from 19 options: downgrade, grant all permissions, restricted settings, test builds, storage location, Play Store or a custom installer and more.", settings("installer")),
@@ -135,7 +140,8 @@ private val CHAPTERS = listOf(
         Feature(Sym.Bolt, "Performance mode", "Lite keeps older phones smooth by stopping decorative motion; Boost keeps more images ready on fast ones. Auto picks for you.", settings("visuals")),
         Feature(Sym.MotionPhotosOff, "Disable animations", "Every transition snaps instantly.", settings("visuals")),
         Feature(Sym.ViewAgenda, "Hide tabs", "Hide the Apps, PC, TV or My Apps tab. The Dev tab always stays.", settings("interface")),
-        Feature(Sym.Tv, "Android TV (Beta)", "Orion runs on Android TV: it opens on the TV catalog, installs TV apps right on the TV, and every card lights up as your remote moves. Tap the TV Beta pill to report a bug."),
+        Feature(Sym.OpenInFull, "Full screen", "Hide the status bar while Orion is open, or keep it showing. Swipe down from the top to peek it.", settings("visuals")),
+        Feature(Sym.Tv, "Android TV (Beta)", "Orion runs on Android TV: it opens on the TV catalog, installs TV apps right on the TV, and every card lights up as your remote moves. Tap the TV Beta pill to report a bug. Downloads that stall on a server switch to a plain connection by themselves."),
         Feature(Sym.DesktopWindows, "Tablets and landscape", "Orion rotates freely on tablets and foldables, with a side rail and a centered, readable column."),
     )),
     Chapter("settings", "Settings and Backup", "Settings arranged your way, and progress that never gets lost.", Sym.Settings, Color(0xFFEC4899), MaterialShapes.Pentagon, listOf(
@@ -208,7 +214,7 @@ fun KnowOrionScreen(vm: MainViewModel, onClose: () -> Unit) {
     val floating by remember { derivedStateOf { list.firstVisibleItemIndex >= 3 } }
     LaunchedEffect(current) { if (current >= 0) { if (floating) chips.animateScrollToItem(current) else chips.requestScrollToItem(current) } }
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize().background(cs.surface), list, contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
+        LazyColumn(Modifier.fillMaxSize().background(cs.surface).readableWidth(), list, contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
         item("hero") { GuideHero(total) }
         item("search") { GuideSearch(query) { query = it } }
         item("chips") { ChapterChips(shown, -1, rememberLazyListState(), ::jump) }

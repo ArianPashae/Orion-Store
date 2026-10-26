@@ -432,9 +432,16 @@ private fun Overlays(vm: MainViewModel) {
     if (vm.changeRequest) vm.selectedApp?.let { ChangeRequestSheet(vm, it) { vm.changeRequest = false } }
     vm.autoReport?.let { log -> AutoReportDialog(vm, log) }
     if (vm.guidePrompt) GuidePromptDialog(vm)
+    if (vm.verifierPrompt) VerifierDialog(vm)
     vm.devProfile?.let { (dev, from) -> if (vm.selectedApp?.id == from) DevSheet(vm, dev) { vm.devProfile = null } else SideEffect { vm.devProfile = null } }
     if (vm.donateNudge) DonateNudgeDialog(vm)
     vm.installAsk?.let { (a, f) -> InstallOptionsSheet(vm, a, f) { vm.installAsk = null } }
+    vm.uninstallManyAsk?.let { list ->
+        AlertDialog({ vm.uninstallManyAsk = null }, icon = { Icon(Sym.Delete, null) }, title = { Text("Uninstall ${list.size} apps?") },
+            text = { Text(list.joinToString(", ") { it.name } + ". Their data on this phone is removed too.", maxLines = 6, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+            confirmButton = { Button({ vm.uninstallManyAsk = null; vm.uninstallMany(list) }, shapes = ButtonDefaults.shapes()) { Text("Uninstall") } },
+            dismissButton = { TextButton({ vm.uninstallManyAsk = null }) { Text("Cancel") } })
+    }
     vm.uninstallAsk?.let { a ->
         AlertDialog({ vm.uninstallAsk = null }, icon = { Icon(Sym.Delete, null) }, title = { Text("Uninstall ${a.name}?") },
             text = { Text("The app and all of its data will be removed from this phone.") },
@@ -473,6 +480,42 @@ private fun DonateNudgeDialog(vm: MainViewModel) {
                 TextButton({ done(false) }) { Text("Maybe later") }
             }
         })
+}
+
+/** Offered once, on the 6th start, when Android's developer-verification component is detected. One tap turns it off; minimal by design. */
+@Composable
+private fun VerifierDialog(vm: MainViewModel) {
+    val cs = MaterialTheme.colorScheme
+    val state = vm.verifierState
+    val working = state == "working"; val done = state == "done"; val failed = state == "failed"
+    AlertDialog({ if (!working) vm.finishVerifier() },
+        icon = {
+            when {
+                working -> LoadingIndicator(Modifier.size(64.dp))
+                done -> MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Sunny), 0, 64.dp, cs.primaryContainer) { Icon(Sym.GppGood, null, Modifier.size(32.dp), tint = cs.onPrimaryContainer) }
+                else -> MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Heart), 0, 64.dp, if (failed) cs.errorContainer else cs.tertiaryContainer) {
+                    Icon(if (failed) Sym.GppMaybe else Sym.Shield, null, Modifier.size(32.dp), tint = if (failed) cs.onErrorContainer else cs.onTertiaryContainer)
+                }
+            }
+        },
+        title = { Text(when { working -> "Securing"; done -> "Protected"; failed -> "Couldn't secure"; else -> "Protect sideloading" }, style = MaterialTheme.typography.headlineSmallEmphasized) },
+        text = {
+            Text(when {
+                working -> "Switching off developer verification."
+                done -> "Developer verification is off. Installs stay instant."
+                failed -> vm.verifierError
+                else -> "Android switched on developer verification, which can slow or block sideloaded apps. Orion can turn it off for you."
+            })
+        },
+        confirmButton = {
+            when {
+                working -> {}
+                done -> Button({ vm.finishVerifier() }, shapes = ButtonDefaults.shapes()) { Text("Done") }
+                failed -> Button({ vm.secureDevice() }, shapes = ButtonDefaults.shapes()) { Text("Try again") }
+                else -> Button({ vm.secureDevice() }, shapes = ButtonDefaults.shapes()) { Text("Secure me") }
+            }
+        },
+        dismissButton = { if (!working && !done) TextButton({ vm.finishVerifier() }) { Text("Not now") } })
 }
 
 /** One-time hello for 2.2.0: points everyone at Know Orion. */

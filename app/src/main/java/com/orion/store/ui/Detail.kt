@@ -78,7 +78,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
     val app = remember(base, s.resolvedPackageNames, s.stableOnly) { base.copy(packageName = s.resolvedPackageNames[base.id] ?: base.packageName,
         availableVersions = if (s.stableOnly) base.availableVersions.filter { it.type == "Stable" }.ifEmpty { base.availableVersions } else base.availableVersions) }
     val local = s.installedVersions[app.id]
-    val needsUpdate = hasAvailableUpdate(app, local, s.streamOf(app.id))
+    val needsUpdate = hasAvailableUpdate(app, local, s.streamOf(app.id), s.installedBuilds[app.id])
     val installed = !local.isNullOrEmpty(); val upToDate = installed && !needsUpdate
     val activeId = d.activeDownloads[app.id]; val cleanup = d.pendingCleanup[app.id]?.fileName; val ready = d.readyToInstall[app.id]
     val status = d.downloadStatus[app.id]; val progress = d.downloadProgress[app.id] ?: 0f
@@ -139,6 +139,10 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
     fun report() = vm.tracker.open("mailto:${vm.config?.supportEmail ?: Defaults.SUPPORT_EMAIL}?subject=${Uri.encode("Report Issue: ${app.name}")}")
 
     val shown = target ?: app.availableVersions.firstOrNull { it.type == s.streamOf(app.id) } ?: app.availableVersions.firstOrNull()
+    // Morphe and other patched builds: their release notes describe the build bot, not the app
+    val notesTag = if (app.patches.isNotEmpty() || listOf(app.name, app.author, app.repoUrl, app.githubRepo, app.gitlabRepo).any { "morphe" in it.orEmpty().lowercase() }) "" else shown?.tag.orEmpty()
+    // Fetched as the page opens, not when the row scrolls in; null while loading, NOTES_FAILED when the call failed
+    val notes by produceState<String?>(null, app.id, notesTag) { value = if (notesTag.isEmpty()) null else fetchReleaseNotes(app, notesTag, s.githubToken) ?: NOTES_FAILED }
     val from = remember(app.id) { vm.openFrom }
     val list = rememberLazyListState()
     val scrolled by remember { derivedStateOf { list.firstVisibleItemIndex > 0 } }
@@ -151,7 +155,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                     IconToggleButton(fav, { vm.haptic(H.HEAVY); vm.upd { it.toggleFavorite(app.id) } }) {
                         Icon(if (fav) Sym.Favorite else Sym.FavoriteBorder, "Favorite", tint = if (fav) cs.primary else LocalContentColor.current)
                     }
-                    IconButton({ vm.haptic(H.SELECTION); vm.tracker.share(app.name, "Check out ${app.name} on Orion Store!", Share.webLink(app.id, app.icon)) }) { Icon(Sym.Share, "Share") }
+                    IconButton({ vm.haptic(H.SELECTION); vm.tracker.share(app.name, "Check out ${app.name} on Orion Store!", Share.webLink(app.id)) }) { Icon(Sym.Share, "Share") }
                     Box {
                         IconButton({ more = true }) { Icon(Sym.MoreVert, "More options") }
                         DropdownMenu(more, { more = false }, shape = RoundedCornerShape(20.dp)) {
@@ -254,6 +258,12 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                                 modifier = Modifier.weight(1f, false).clip(Pill).clickable(enabled = app.author.isNotBlank()) { vm.haptic(H.LIGHT); vm.devProfile = app.author to app.id })
                             Spacer(Modifier.width(4.dp)); Icon(Sym.VerifiedFilled, "Verified", Modifier.size(16.dp), tint = cs.primary)
                         }
+                        app.stars?.let { n ->
+                            Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Sym.StarFilled, null, Modifier.size(14.dp), tint = cs.tertiary); Spacer(Modifier.width(4.dp))
+                                Text("${compactCount(n)} ${if (n == 1) "star" else "stars"}", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                            }
+                        }
                         statusText(app)?.let { (t, c) -> Text(t, style = MaterialTheme.typography.labelLarge, color = c, modifier = Modifier.padding(top = 2.dp)) }
                         if (cleanup != null) Box(Modifier.padding(top = 6.dp)) { Tag("Pending cleanup", Caution, Sym.CleaningServices) }
                         else if (external) Box(Modifier.padding(top = 6.dp)) { Tag("Hosted on $domain", Caution, Sym.OpenInNew) }
@@ -274,7 +284,6 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                     Cell({ Icon(when (app.platform) { Platform.ANDROID -> Sym.Android; Platform.TV -> Sym.Tv; else -> Sym.DesktopWindows }, null, Modifier.size(24.dp)) }, app.platform)
                 }
             }
-            if (needsUpdate) item("new") { WhatsNew(vm, app, shown, true) }
             if (app.screenshots.isNotEmpty()) item("shots") {
                 val portrait = app.platform == Platform.ANDROID
                 LazyRow(Modifier.reveal(1).padding(top = 8.dp), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -288,7 +297,7 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                     style = MaterialTheme.typography.bodyLarge, color = cs.onSurfaceVariant, maxLines = if (open) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis)
                 if (app.description.length > 180) TextButton({ open = !open }, Modifier.padding(start = 8.dp)) { Text(if (open) "Show less" else "Read more") }
             } }
-            if (!needsUpdate) item("new") { WhatsNew(vm, app, shown, false) }
+            if (notesTag.isNotEmpty()) item("new") { WhatsNew(vm, shown, notes, needsUpdate) }
             if (app.patches.isNotEmpty()) item("patches") { Column(Modifier.reveal(3)) {
                 // Folded like App info: one row with the count, every patch name listed once opened
                 var open by rememberSaveable { mutableStateOf(false) }
@@ -296,8 +305,9 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
                 val turn by animateFloatAsState(if (open) 180f else 0f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "chev")
                 Column(Modifier.padding(horizontal = 16.dp).padding(top = 20.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
                     SegmentedListItem({ open = !open; vm.haptic(H.SELECTION) }, ListItemDefaults.segmentedShapes(0, if (open) list.size + 1 else 1),
-                        colors = ListItemDefaults.segmentedColors(containerColor = if (open) cs.tertiaryContainer else cs.surfaceContainer),
-                        leadingContent = { IconBox(Sym.Extension, cs.tertiary) }, trailingContent = { Icon(Sym.ExpandMore, if (open) "Hide patches" else "Show patches", Modifier.graphicsLayer { rotationZ = turn }) },
+                        colors = if (open) ListItemDefaults.segmentedColors(containerColor = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer, leadingContentColor = cs.onTertiaryContainer,
+                            trailingContentColor = cs.onTertiaryContainer, supportingContentColor = cs.onTertiaryContainer.copy(.8f)) else ListItemDefaults.segmentedColors(containerColor = cs.surfaceContainer),
+                        leadingContent = { IconBox(Sym.Extension, if (open) cs.onTertiaryContainer else cs.tertiary) }, trailingContent = { Icon(Sym.ExpandMore, if (open) "Hide patches" else "Show patches", Modifier.graphicsLayer { rotationZ = turn }) },
                         supportingContent = { Text("${list.size} applied to this build", maxLines = 1) }) { Text("Patches", style = MaterialTheme.typography.titleMedium) }
                     AnimatedVisibility(open, enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) + fadeIn(), exit = shrinkVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) + fadeOut()) {
                         Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
@@ -436,33 +446,36 @@ fun DetailScreen(vm: MainViewModel, base: AppItem) {
     lightbox?.let { Lightbox(app.screenshots, it) { lightbox = null } }
 }
 
-/** The release notes of the version Download would fetch, folded into one row. Opens by itself while that version is an update. */
+private const val NOTES_FAILED = "\u0000"
+
+/** The release notes of the version Download would fetch, folded into one row that shows at once; the notes fill in when they arrive. */
 @Composable
-private fun WhatsNew(vm: MainViewModel, app: AppItem, v: VersionOption?, update: Boolean) {
-    // Morphe and other patched builds: their release notes describe the build bot, not the app
-    val patched = app.patches.isNotEmpty() || listOf(app.name, app.author, app.repoUrl, app.githubRepo, app.gitlabRepo).any { "morphe" in it.orEmpty().lowercase() }
-    val tag = if (patched) "" else v?.tag.orEmpty(); val token = LocalS.current.githubToken; val cs = MaterialTheme.colorScheme
-    val notes by produceState<String?>(null, app.id, tag) { value = if (tag.isEmpty()) null else fetchReleaseNotes(app, tag, token) }
-    var open by rememberSaveable(app.id, tag) { mutableStateOf(false) }
+private fun WhatsNew(vm: MainViewModel, v: VersionOption?, notes: String?, update: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    var open by rememberSaveable(v?.tag) { mutableStateOf(false) }
     val turn by animateFloatAsState(if (open) 180f else 0f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "chev")
-    AnimatedVisibility(!notes.isNullOrBlank(), enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) + fadeIn(), exit = fadeOut()) {
-        val text = notes.orEmpty()
-        Surface(Modifier.padding(horizontal = 16.dp).padding(top = if (update) 8.dp else 20.dp).fillMaxWidth().animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
-            shape = RoundedCornerShape(24.dp), color = if (update) cs.tertiaryContainer else cs.surfaceContainer, contentColor = if (update) cs.onTertiaryContainer else cs.onSurface) {
-            Column {
-                Row(Modifier.fillMaxWidth().clickable { open = !open; vm.haptic(H.SELECTION) }.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconBox(Sym.NewReleases, if (update) cs.tertiary else cs.primary)
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("What's new", style = MaterialTheme.typography.titleMedium)
-                        Text(listOfNotNull(v?.version?.let { (if (update) "Update to " else "Version ") + it.removePrefix("v") }, v?.date?.ifBlank { null }).joinToString(" · "),
-                            style = MaterialTheme.typography.bodyMedium, color = LocalContentColor.current.copy(.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Icon(Sym.ExpandMore, if (open) "Hide changelog" else "Show changelog", Modifier.graphicsLayer { rotationZ = turn })
+    // An update wears the secondary container pair: tinted enough to stand out, and its on-color keeps the text readable on every palette
+    val (bg, fg) = if (update) cs.secondaryContainer to cs.onSecondaryContainer else cs.surfaceContainer to cs.onSurface
+    Surface(Modifier.padding(horizontal = 16.dp).padding(top = 20.dp).fillMaxWidth().animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+        shape = RoundedCornerShape(24.dp), color = bg, contentColor = fg) {
+        Column {
+            Row(Modifier.fillMaxWidth().clickable { open = !open; vm.haptic(H.SELECTION) }.padding(16.dp, 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconBox(Sym.NewReleases, if (update) cs.onSecondaryContainer else cs.primary)
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("What's new", style = MaterialTheme.typography.titleMedium)
+                    Text(listOfNotNull(v?.version?.let { (if (update) "Update to " else "Version ") + it.removePrefix("v") }, v?.date?.ifBlank { null }).joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium, color = if (update) fg.copy(.8f) else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (open) SelectionContainer {
-                    Text(notesText(text), Modifier.padding(start = 20.dp, end = 20.dp, bottom = 18.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
-                        style = MaterialTheme.typography.bodyMedium, color = LocalContentColor.current.copy(.9f))
+                Icon(Sym.ExpandMore, if (open) "Hide changelog" else "Show changelog", Modifier.graphicsLayer { rotationZ = turn })
+            }
+            if (open) when (notes) {
+                null -> Box(Modifier.fillMaxWidth().padding(bottom = 18.dp), contentAlignment = Alignment.Center) { LoadingIndicator(Modifier.size(40.dp), color = fg) }
+                NOTES_FAILED, "" -> Text(if (notes.isEmpty()) "This release came without notes." else "Couldn't load the release notes right now.",
+                    Modifier.padding(start = 20.dp, end = 20.dp, bottom = 18.dp), style = MaterialTheme.typography.bodyMedium, color = fg.copy(.8f))
+                else -> SelectionContainer {
+                    Text(notesText(notes), Modifier.padding(start = 20.dp, end = 20.dp, bottom = 18.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodyMedium, color = fg.copy(.9f))
                 }
             }
         }
@@ -544,7 +557,7 @@ private fun ShareLinksSheet(vm: MainViewModel, app: AppItem, onDismiss: () -> Un
     val clip = LocalClipboardManager.current; val cs = MaterialTheme.colorScheme
     var open by remember { mutableStateOf<String?>(null) }; var copied by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(copied) { if (copied != null) { delay(2000); copied = null } }
-    val web = Share.webLink(app.id, app.icon)
+    val web = Share.webLink(app.id)
     data class Row5(val key: String, val label: String, val helper: String, val value: String, val action: String, val multi: Boolean)
     val rows = listOf(
         Row5("deep", "Deep Link", "Launches Orion Store directly to this app", Share.deepLink(app.id), "Copy", false),

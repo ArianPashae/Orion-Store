@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.core.util.AtomicFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import java.io.File
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -91,7 +93,8 @@ fun rawMirrors(url: String): List<String> {
     return listOf(url, "https://raw.githack.com/$o/$r/$b/$p", "https://cdn.jsdelivr.net/gh/$o/$r@$b/$p")
 }
 
-data class CatalogLoad(val rawApps: JsonElement?, val mirror: Map<String, List<CatalogProcessor.Release>>?, val config: StoreConfig?, val source: String, val devError: String? = null, val failed: Boolean = false)
+data class CatalogLoad(val rawApps: JsonElement?, val mirror: Map<String, List<CatalogProcessor.Release>>?, val config: StoreConfig?, val source: String, val devError: String? = null, val failed: Boolean = false,
+    val stars: Map<String, Int>? = null)
 
 /** Last good catalog, already processed, so boot paints from disk while the network refresh runs. */
 @Serializable data class CatalogCache(val apps: List<AppItem>, val config: StoreConfig? = null, val source: String = "")
@@ -135,12 +138,23 @@ class Repository(private val ctx: Context) {
         hosts.firstNotNullOfOrNull { u -> runCatching { call(u, CacheControl.FORCE_CACHE) }.getOrNull() }
     }
 
-    private suspend fun fetchSet(config: StoreConfig, appsFallback: String?, ts: String, a: Attempt): Pair<JsonElement, Map<String, List<CatalogProcessor.Release>>?> = coroutineScope {
+    /** A few KB of raw file from the data branch, revalidated through the HTTP cache: no GitHub API call, so guests keep their 60 an hour. */
+    private suspend fun fetchStars(a: Attempt): Map<String, Int>? = withContext(Dispatchers.IO) {
+        runCatching {
+            first(rawMirrors(Defaults.STARS_JSON), a) { u ->
+                Net.catalog.newCall(Request.Builder().url(u).cacheControl(CacheControl.Builder().noCache().build()).build()).execute().use { r -> if (!r.isSuccessful) throw HttpError(r.code, ""); r.body.string() }
+            }.let { json.decodeFromString(MapSerializer(String.serializer(), Int.serializer()), it) }
+                .mapKeys { it.key.lowercase() }
+        }.getOrNull()
+    }
+
+    private suspend fun fetchSet(config: StoreConfig, appsFallback: String?, ts: String, a: Attempt): Triple<JsonElement, Map<String, List<CatalogProcessor.Release>>?, Map<String, Int>?> = coroutineScope {
         val appsUrl = config.appsJsonUrl.ifEmpty { appsFallback ?: throw IOException("Dev config is missing appsJsonUrl.") }
         val mirrorUrl = config.mirrorJsonUrl?.ifEmpty { null } ?: Defaults.MIRROR_JSON
         val mirror = async { fetchMirror(mirrorUrl, a) }
+        val stars = async { fetchStars(a) }
         val apps = async { first(rawMirrors(appsUrl) + listOfNotNull(appsFallback), a) { Net.text(bust(it, ts), noStore = true, c = Net.catalog) } }
-        json.parseToJsonElement(apps.await()) to mirror.await()
+        Triple(json.parseToJsonElement(apps.await()), mirror.await(), stars.await())
     }
 
     /** Port of App.tsx loadApps network section: dev config → GitHub → jsDelivr → raw.githack → embedded. */
@@ -155,16 +169,16 @@ class Repository(private val ctx: Context) {
                 val cfgText = try { Net.retry(bust(url, ts), 1, noStore = true) } catch (e: HttpError) { throw IOException("Dev config request failed with ${e.code}") }
                 val cfg = CatalogProcessor.parseConfig(cfgText)
                 if (cfg.appsJsonUrl.isEmpty()) throw IOException("Dev config is missing appsJsonUrl.")
-                val (apps, mirror) = try { fetchSet(cfg, null, ts, a) } catch (e: HttpError) { throw IOException("Dev apps request failed with ${e.code}") }
-                return CatalogLoad(apps, mirror, cfg, "Developer Config")
+                val (apps, mirror, stars) = try { fetchSet(cfg, null, ts, a) } catch (e: HttpError) { throw IOException("Dev apps request failed with ${e.code}") }
+                return CatalogLoad(apps, mirror, cfg, "Developer Config", stars = stars)
             } catch (e: Exception) { devError = e.message ?: "Failed to load developer config." }
         } else {
             for (i in Defaults.CONFIG_URLS.indices) {
                 val h = host(Defaults.CONFIG_URLS[i]); if (h in a.dead) continue
                 runCatching {
                     val cfg = try { CatalogProcessor.parseConfig(Net.retry("${Defaults.CONFIG_URLS[i]}?t=$ts", 1, noStore = true)) } catch (e: IOException) { if (e !is HttpError) a.dead += h; throw e }
-                    val (apps, mirror) = fetchSet(cfg, Defaults.APPS_URLS[i], ts, a)
-                    return CatalogLoad(apps, mirror, cfg, Defaults.MIRROR_LABELS[i])
+                    val (apps, mirror, stars) = fetchSet(cfg, Defaults.APPS_URLS[i], ts, a)
+                    return CatalogLoad(apps, mirror, cfg, Defaults.MIRROR_LABELS[i], stars = stars)
                 }
             }
         }

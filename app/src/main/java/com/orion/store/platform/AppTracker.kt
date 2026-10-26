@@ -162,7 +162,7 @@ class AppTracker(private val ctx: Context) {
         if (!withContext(Dispatchers.IO) { isValidApk(f) }) { f.delete(); throw NativeError("CORRUPT_APK") }
         val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
         val base = Intent(Intent.ACTION_VIEW).setDataAndType(uri, APK_MIME).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).putExtra(Intent.EXTRA_RETURN_RESULT, true)
-        val handlers = pm.queryIntentActivities(base, PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo }
+        val handlers = pm.queryIntentActivities(base, PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo }.filter { it.packageName != ctx.packageName }
         if (handlers.isEmpty()) throw NativeError("NO_INSTALLER")
         val pick = when (pref) {
             "chooser" -> null
@@ -170,7 +170,9 @@ class AppTracker(private val ctx: Context) {
             else -> handlers.firstOrNull { isSys(it.applicationInfo) && "packageinstaller" in it.packageName }
                 ?: handlers.firstOrNull { "packageinstaller" in it.packageName } ?: handlers.firstOrNull { isSys(it.applicationInfo) }
         }
+        // Orion is an installer too now: never offer itself for the store's own installs
         val intent = pick?.let { Intent(base).setClassName(it.packageName, it.name) } ?: Intent.createChooser(base, "Install App")
+            .putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(android.content.ComponentName(ctx, com.orion.store.ui.ApkInstallActivity::class.java)))
         when (ResultHost.run(intent).first) {
             Activity.RESULT_OK -> Unit
             Activity.RESULT_CANCELED -> throw NativeError("INSTALL_CANCELED")
@@ -224,6 +226,14 @@ class AppTracker(private val ctx: Context) {
         .apply { isAccessible = true }.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
 
     private fun Process.err() = errorStream.bufferedReader().readText()
+
+    /** Runs one shell command through the elevated shell (root or Shizuku) and returns its output; throws on a non-zero exit. */
+    suspend fun runPrivileged(cmd: String): String = withContext(Dispatchers.IO) {
+        requireShizuku()
+        val p = sh(cmd); val out = p.inputStream.bufferedReader().readText(); val code = p.waitFor()
+        if (code != 0) throw NativeError("${out.trim()} ${p.err()}".trim().ifEmpty { "Command failed ($code)" })
+        out
+    }
 
     private fun requireShizuku() {
         if (root) return

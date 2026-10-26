@@ -215,7 +215,7 @@ fun AiScreen(vm: MainViewModel, onClose: () -> Unit) {
                 ai.messages.isEmpty() -> AiIntro("Ask for any app", "Describe what you need, or ask anything about Orion.") {
                     Starters { send(it) }
                 }
-                else -> LazyColumn(Modifier.fillMaxSize(), list, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                else -> LazyColumn(Modifier.fillMaxSize().readableWidth(), list, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     itemsIndexed(ai.messages, key = { i, _ -> i }) { _, m -> Entrance(m) { if (m.user) UserBubble(m.text) else AiBubble(vm, m) } }
                 }
             }
@@ -247,7 +247,7 @@ private fun Starters(onPick: (String) -> Unit) {
 
 @Composable
 private fun AiIntro(title: String, body: String, extra: @Composable ColumnScope.() -> Unit) =
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+    Column(Modifier.fillMaxSize().readableWidth().verticalScroll(rememberScrollState()).padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center) {
         AiOrb(88.dp, false)
         Text(title, Modifier.padding(horizontal = 28.dp).padding(top = 24.dp), style = MaterialTheme.typography.headlineMediumEmphasized, textAlign = TextAlign.Center)

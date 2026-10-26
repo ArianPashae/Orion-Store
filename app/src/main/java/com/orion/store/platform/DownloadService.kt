@@ -59,6 +59,9 @@ object Downloads {
     val state = MutableStateFlow<Map<String, Dl>>(emptyMap())
     private enum class R { OK, RETRY, FATAL }
 
+    /** For entry points that start without the store (the APK installer sheet): the folder only, no cleanup of other downloads. */
+    fun attach(ctx: Context) { if (!::app.isInitialized) app = ctx.applicationContext }
+
     fun init(ctx: Context, keep: String?) {
         app = ctx.applicationContext
         runCatching {
@@ -125,7 +128,7 @@ object Downloads {
 
     /** Null when the file is small or the server can't split it: the caller falls back to one stream. */
     private suspend fun split(url: String, name: String, fin: File): R? {
-        val (real, total) = h1.newCall(req(url).header("Range", "bytes=0-0").build()).also { calls[name] = it }.execute().use { r ->
+        val (real, total) = h1.newBuilder().readTimeout(12, TimeUnit.SECONDS).build().newCall(req(url).header("Range", "bytes=0-0").build()).also { calls[name] = it }.execute().use { r ->
             if (r.code != 206 || r.body.contentType()?.toString()?.contains("text/html") == true) return null
             r.request.url.toString() to (r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: return null)
         }
@@ -133,9 +136,16 @@ object Downloads {
         // Its own name, so a single-stream resume never mistakes a half-filled split file for a finished prefix
         val temp = File(dir(), "$name.parts").apply { delete() }
         RandomAccessFile(temp, "rw").use { it.setLength(total) }
-        val done = AtomicLong(); val step = total / PARTS
+        val done = AtomicLong(); val step = total / PARTS; val stalled = java.util.concurrent.atomic.AtomicBoolean()
         val ok = coroutineScope {
-            val ticker = launch { while (true) { delay(500); set(name) { it.copy(progress = (done.get() * 100 / total).toInt()) } } }
+            // Some servers (often what TVs reach through) accept the ranges and then send nothing: after 15 s without a byte, drop to one plain stream
+            val ticker = launch {
+                var seen = -1L; var still = 0
+                while (true) {
+                    delay(500); val now = done.get(); set(name) { it.copy(progress = (now * 100 / total).toInt()) }
+                    if (now == seen) { if (++still >= 30) { stalled.set(true); calls.keys.filter { it.startsWith("$name#") }.forEach { calls.remove(it)?.cancel() } } } else { seen = now; still = 0 }
+                }
+            }
             val parts = (0 until PARTS).map { i ->
                 async(Dispatchers.IO) {
                     val end = if (i == PARTS - 1) total - 1 else (i + 1) * step - 1; var pos = i * step
@@ -146,7 +156,7 @@ object Downloads {
                                 RandomAccessFile(temp, "rw").use { out ->
                                     out.seek(pos); val buf = ByteArray(1 shl 16); val inp = r.body.byteStream()
                                     while (pos <= end) {
-                                        if (name in cancelled) return@async false
+                                        if (name in cancelled || stalled.get()) return@async false
                                         val n = inp.read(buf, 0, minOf(buf.size.toLong(), end - pos + 1).toInt()); if (n < 0) break
                                         out.write(buf, 0, n); pos += n; done.addAndGet(n.toLong())
                                     }
@@ -155,7 +165,7 @@ object Downloads {
                             }
                         }
                         if (pos > end) return@async true
-                        if (name in cancelled) return@async false
+                        if (name in cancelled || stalled.get()) return@async false
                         delay((t + 1) * 1000L)
                     }
                     false
@@ -171,7 +181,8 @@ object Downloads {
     private suspend fun attempt(url: String, name: String): R {
         val temp = File(dir(), "$name.tmp"); val fin = File(dir(), name)
         var existing = if (temp.exists()) temp.length() else 0L
-        if (existing == 0L) split(url, name, fin)?.let { return it }
+        // A probe that times out or breaks falls through to the plain stream instead of retrying the split forever
+        if (existing == 0L) runCatching { split(url, name, fin) }.getOrNull()?.let { return it }
         val rb = req(url)
         if (existing > 0) rb.header("Range", "bytes=$existing-")
         val call = client.newCall(rb.build()).also { calls[name] = it }

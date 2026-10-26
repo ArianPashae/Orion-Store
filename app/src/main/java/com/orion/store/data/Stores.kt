@@ -20,6 +20,8 @@ import kotlin.math.max
 @Serializable data class CustomFont(val id: String, val name: String, val fileName: String, val mimeType: String, val path: String, val addedAt: Long)
 @Serializable data class LibraryEntry(val status: String, val fileName: String? = null, val version: String? = null, val downloadedAt: Long, val installedAt: Long? = null, val lastSeenAt: Long)
 @Serializable data class TabViewState(val query: String = "", val category: String = "All", val sort: SortOption = SortOption.NEWEST, val filterFavorites: Boolean = false)
+/** What Orion installed: the app's own versionName and the catalog version it was offered as, so later checks compare like with like. */
+@Serializable data class InstalledBuild(val versionName: String, val offered: String)
 @Serializable data class IgnoredUpdate(val type: String, val timestamp: Long? = null, val version: String? = null)
 @Serializable data class UserProfile(val name: String, val avatarId: String? = null, val avatarUrl: String? = null, val createdAt: Long = 0)
 @Serializable data class CustomBundle(val id: String, val title: String, val description: String, val icon: String, val appIds: List<String>, val createdAt: Long = 0, val submittedAt: Long? = null)
@@ -81,6 +83,8 @@ import kotlin.math.max
     val showAppAbout: Boolean = false,
     val bottomNavScale: Float = .85f,
     val highRefreshRate: Boolean = true,
+    /** Status bar hidden while Orion is open; a swipe from the top peeks it. */
+    val immersive: Boolean = true,
     val pullToRefreshCharacter: String = "cat",
     val hapticEnabled: Boolean = true,
     val glassEffect: Boolean = true,
@@ -109,6 +113,7 @@ import kotlin.math.max
     val installedVersions: Map<String, String> = emptyMap(),
     val lastRemoteVersions: Map<String, String> = emptyMap(),
     val appStreams: Map<String, String> = emptyMap(),
+    val installedBuilds: Map<String, InstalledBuild> = emptyMap(),
     val resolvedPackageNames: Map<String, String> = emptyMap(),
     val packageOwners: Map<String, String> = emptyMap(),
     val ignoredUpdates: Map<String, IgnoredUpdate> = emptyMap(),
@@ -144,6 +149,8 @@ import kotlin.math.max
     val aiLocalModel: String = "",
     val aiFabX: Float = -1f, val aiFabY: Float = -1f,
     @Transient val coinFlipHintCount: Int = 0,
+    /** Cold starts so far; the developer-verification popup waits for the 6th. */
+    val launchCount: Int = 0,
 ) {
     fun toggleHiddenTab(tab: String): Settings {
         val next = if (tab in hiddenTabs) hiddenTabs - tab else hiddenTabs + tab

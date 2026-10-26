@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -55,6 +57,11 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
     val visible = rows.filter { it.matches(filter) && it.matchesQuery(query) }
     val queue = d.activeDownloads.size + d.readyToInstall.size
     val cs = MaterialTheme.colorScheme
+    // Long-press an installed app to start picking, tap more to add them, then uninstall them together
+    var picked by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    val removable = visible.filter { it.isInstalledNow && it.app.installsHere() }
+    LaunchedEffect(rows) { picked = picked.filterTo(mutableSetOf()) { id -> rows.any { it.app.id == id && it.isInstalledNow } } }
+    androidx.activity.compose.BackHandler(picked.isNotEmpty()) { picked = emptySet() }
     LazyColumn(Modifier.fillMaxSize().readableWidth(), contentPadding = padding) {
         item("header") { Header(vm) }
         item {
@@ -65,6 +72,18 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
                 }
                 VerticalDivider(Modifier.height(28.dp).padding(horizontal = 4.dp), color = cs.outlineVariant)
                 FilterPills(vm, s.myAppsFilters) { f -> Choice(filter == f, "${f.label} · ${rows.count { it.matches(f) }}", filterIcon(f)) { filter = f } }
+            }
+        }
+        if (picked.isNotEmpty()) stickyHeader("picked") {
+            Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), shape = RoundedCornerShape(28.dp), color = cs.secondaryContainer, contentColor = cs.onSecondaryContainer, shadowElevation = 2.dp) {
+                Row(Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton({ picked = emptySet(); vm.haptic(H.LIGHT) }) { Icon(Sym.Close, "Stop selecting") }
+                    Text("${picked.size} selected", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    if (picked.size < removable.size) TextButton({ picked = removable.map { it.app.id }.toSet(); vm.haptic(H.SELECTION) }) { Text("All") }
+                    Button({ vm.uninstallManyAsk = rows.filter { it.app.id in picked }.map { it.app }; picked = emptySet() }, shapes = ButtonDefaults.shapes(), contentPadding = ButtonDefaults.SmallContentPadding) {
+                        Icon(Sym.Delete, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Uninstall")
+                    }
+                }
             }
         }
         if (filter == MyAppsFilter.UPDATES && pending.isNotEmpty()) item {
@@ -78,7 +97,11 @@ fun MyAppsTab(vm: MainViewModel, padding: PaddingValues) {
                 TextButton({ vm.libraryQuery = "" }) { Text("Clear search") }
             } else EmptyState(filterIcon(filter), EMPTY.getValue(filter), if (filter == MyAppsFilter.ALL) "Apps you download from Orion show up here." else null, Modifier.padding(top = 32.dp))
         }
-        itemsIndexed(visible, key = { _, it -> it.app.id }) { i, r -> LibraryRow(vm, r, Modifier.animateItem().reveal(i)) }
+        itemsIndexed(visible, key = { _, it -> it.app.id }) { i, r ->
+            val can = r.isInstalledNow && r.app.installsHere()
+            LibraryRow(vm, r, Modifier.animateItem().reveal(i), if (picked.isEmpty()) null else (r.app.id in picked),
+                onPick = if (!can) null else ({ vm.haptic(H.SELECTION); picked = if (r.app.id in picked) picked - r.app.id else picked + r.app.id }))
+        }
         // Ignored updates: listed with a one-tap undo, under All and Updates where a missing update would be noticed
         val now = System.currentTimeMillis(); val lookup = vm.lookup
         val ignored = if (filter == MyAppsFilter.ALL || filter == MyAppsFilter.UPDATES)
@@ -153,11 +176,19 @@ private fun FilterPills(vm: MainViewModel, saved: List<String>, pill: @Composabl
 }
 
 @Composable
-private fun LibraryRow(vm: MainViewModel, r: MyAppRow, modifier: Modifier) {
+private fun LibraryRow(vm: MainViewModel, r: MyAppRow, modifier: Modifier, picked: Boolean? = null, onPick: (() -> Unit)? = null) {
     val (icon, c) = tone(r); val cs = MaterialTheme.colorScheme; val compact = LocalS.current.compactMode
-    Column(modifier.fillMaxWidth().padding(horizontal = 8.dp).springClick { vm.selectApp(r.app, "lib") }.animateContentSize().padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 10.dp)) {
+    val bg by animateColorAsState(if (picked == true) cs.secondaryContainer else Color.Transparent, label = "pick")
+    // While picking a tap toggles the row (rows that can't be uninstalled do nothing); otherwise a long-press starts picking
+    Column(modifier.fillMaxWidth().padding(horizontal = 8.dp).background(bg, RoundedCornerShape(20.dp))
+        .springClick(onLongClick = if (picked == null) onPick else null) { if (picked == null) vm.selectApp(r.app, "lib") else onPick?.invoke() }
+        .animateContentSize().padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            AppIcon(r.app, if (compact) 40.dp else 52.dp, state = true, from = "lib")
+            val size = if (compact) 40.dp else 52.dp
+            Box(contentAlignment = Alignment.Center) {
+                AppIcon(r.app, size, state = true, from = "lib")
+                if (picked == true) Box(Modifier.size(size).background(cs.primary, MaterialShapes.Cookie9Sided.toShape()), contentAlignment = Alignment.Center) { Icon(Sym.Check, "Selected", tint = cs.onPrimary) }
+            }
             Spacer(Modifier.width(if (compact) 12.dp else 16.dp))
             Column(Modifier.weight(1f)) {
                 Text(r.app.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -179,7 +210,7 @@ private fun LibraryRow(vm: MainViewModel, r: MyAppRow, modifier: Modifier) {
                 action == "delete" -> IconButton({ vm.deleteLibraryApk(r.app) }) { Icon(Sym.DeleteOutline, "Delete APK") }
                 !r.isInstalledNow || !r.app.installsHere() -> Icon(Sym.ChevronRight, "Open details", tint = cs.onSurfaceVariant)
             }
-            if (r.isInstalledNow && r.app.installsHere() && r.status != "downloading") Box {
+            if (picked == null && r.isInstalledNow && r.app.installsHere() && r.status != "downloading") Box {
                 var menu by remember { mutableStateOf(false) }
                 IconButton({ menu = true; vm.haptic(H.LIGHT) }) { Icon(Sym.MoreVert, "More options for ${r.app.name}") }
                 DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(20.dp)) {

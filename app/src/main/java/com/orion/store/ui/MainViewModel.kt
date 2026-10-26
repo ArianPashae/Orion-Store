@@ -159,6 +159,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (flag("dock") == null) set { st -> st.copy(bottomNavScale = if (st.bottomNavScale == 1f) .85f else st.bottomNavScale, seenFlags = st.seenFlags + "dock=compact") }
         // 2.2.5: "About this app" previews start off; rows that never had the switch touched follow the new default once
         if (flag("about") == null) set { st -> st.copy(showAppAbout = false, seenFlags = st.seenFlags + "about=off") }
+        set { it.copy(launchCount = it.launchCount + 1) }
         // Tier badges follow the shared level, whichever XP source pushed it over
         viewModelScope.launch {
             combine(settings, data) { st, dt -> Xp.level(Xp.total(st, dt.appLibrary.size)) }.distinctUntilChanged().collect { lvl ->
@@ -266,9 +267,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // the forced update or maintenance screens, never over an open app, sheet or Settings.
     var welcomeOpen by mutableStateOf(false); var announceNow by mutableStateOf(false)
     var tour by mutableStateOf(false); var donateOpen by mutableStateOf(false); var guidePrompt by mutableStateOf(false)
+    /** Developer-verification popup: intro / working / done / failed. */
+    var verifierPrompt by mutableStateOf(false); var verifierState by mutableStateOf("intro"); var verifierError by mutableStateOf("")
+    /** Developer test run: "done" or "failed" plays that outcome without running a single command or touching the seen flag. */
+    var verifierFake by mutableStateOf<String?>(null)
+    fun testVerifier(outcome: String) { verifierFake = outcome; verifierState = "intro"; verifierError = ""; verifierPrompt = true }
     private val turns = kotlinx.coroutines.sync.Mutex()
     private val screenFree get() = startupReady && !forcedBlocking && forcedTest == null && !((config?.maintenanceMode == true || s.localMaintenanceMode) && !bypassMaintenance) &&
-        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen && !donateNudge && !guidePrompt &&
+        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen && !donateNudge && !guidePrompt && !verifierPrompt &&
         snackbar.currentSnackbarData == null
     // Polls every 400 ms: the gate mixes Compose state with the settings StateFlow. One boolean read, so it costs nothing
     private suspend fun untilFree() { while (!screenFree) delay(400) }
@@ -280,6 +286,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         while (!startupReady) delay(200)
         if (!s.seenNativeWelcome) takeTurn { welcomeOpen = true }
         autoReportTurn()
+        if (flag("verifier") == null && s.launchCount >= 6 && Verifier.active(ctx)) takeTurn { verifierState = "intro"; verifierPrompt = true }
         withTimeoutOrNull(15_000) { while (loading || config == null) delay(300) }
         config?.notice?.takeIf { it.show && it.id != flag("notice") }?.let { takeTurn { open(Overlay.NOTICE) } }
         if (d.apps.isNotEmpty() && !s.hasSeenModernUITutorial && s.storeLayout == "classic") takeTurn { tour = false; open(Overlay.TUTORIAL) }
@@ -291,6 +298,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun finishWelcome() { set { it.copy(seenNativeWelcome = true) }; welcomeOpen = false }
+
+    /** Prefer an elevated shell (root/Shizuku); fall back to built-in wireless ADB, whose shell user is enough for these commands. */
+    private suspend fun verifierExec(cmd: String): String = when {
+        s.rootMode || tracker.elevatedReady() -> tracker.runPrivileged(cmd)
+        s.useShizuku -> { tracker.requestElevated(); tracker.runPrivileged(cmd) }
+        WirelessAdb.supported -> WirelessAdb.shell(ctx, cmd)
+        else -> throw NativeError("Turn on Root, Shizuku or Direct install in Settings first.")
+    }
+
+    fun secureDevice() = viewModelScope.launch {
+        verifierState = "working"; verifierError = ""
+        verifierFake?.let { f ->
+            delay(2200)
+            if (f == "done") { verifierState = "done"; haptic(H.SUCCESS) }
+            else { verifierError = "This device blocked the change. Root or Shizuku may get through where ADB can't. (Test run, nothing was changed.)"; verifierState = "failed"; haptic(H.ERROR) }
+            return@launch
+        }
+        val err = runCatching {
+            Verifier.DISABLE_CMDS.forEach { verifierExec(it) }
+            if (Verifier.active(ctx)) runCatching { verifierExec(Verifier.UNINSTALL_CMD) } // OEM blocked disable-user
+            if (Verifier.active(ctx)) throw NativeError("This device blocked the change. Root or Shizuku may get through where ADB can't.")
+        }.exceptionOrNull()
+        if (err == null) { verifierState = "done"; haptic(H.SUCCESS) }
+        else { verifierError = (err as? NativeError)?.message ?: err.message ?: "Couldn't secure this device."; verifierState = "failed"; haptic(H.ERROR) }
+    }
+
+    fun finishVerifier() { if (verifierFake == null) setFlag("verifier", "seen"); verifierFake = null; verifierPrompt = false; verifierState = "intro"; verifierError = "" }
     fun dismissNotice() { config?.notice?.id?.let { setFlag("notice", it) }; overlays -= Overlay.NOTICE }
 
     fun flag(k: String) = s.seenFlags.firstOrNull { it.startsWith("$k=") }?.substringAfter('=')
@@ -389,7 +423,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             r.devError?.let { devStatus = "error"; devError = it }
             mirrorSource = r.source; primary = true
             // The embedded fallback is older than any catalog already on screen
-            process(if (r.config == null && d.apps.isNotEmpty()) null else r.rawApps, r.mirror)
+            process(if (r.config == null && d.apps.isNotEmpty()) null else r.rawApps, r.mirror, r.stars)
             if (r.config != null) CatalogCache(d.apps, r.config, r.source).let { c -> launch(Dispatchers.IO) { runCatching { repo.saveCache(c) } } }
         } catch (e: Exception) {
             if (d.apps.isEmpty()) { error("Failed to load apps"); clearConfigState(); if (st.devConfigEnabled) { devStatus = "error"; devError = e.message ?: "Failed to load developer config." }; haptic(H.ERROR) }
@@ -397,14 +431,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun process(raw: JsonElement?, mirror: Map<String, List<CatalogProcessor.Release>>?) {
+    private suspend fun process(raw: JsonElement?, mirror: Map<String, List<CatalogProcessor.Release>>?, stars: Map<String, Int>? = null) {
         // A load that brought no catalog at all keeps what is on screen rather than emptying the store
         if (raw !is JsonArray && d.apps.isNotEmpty()) { loading = false; refreshing = false; scheduleInstalledSync(); return }
         val m = mirror.orEmpty(); val imported = d.importedApps; val old = allApps()
         // Without a mirror, apps keep their last known releases: marking every app unavailable would also poison the disk cache
         val (apps, imp) = withContext(Dispatchers.Default) {
             val a = CatalogProcessor.process(raw, m); val i = imported.map { CatalogProcessor.processItem(it, m) }
-            if (m.isEmpty()) CatalogProcessor.carryVersions(a, old) to CatalogProcessor.carryVersions(i, old) else a to i
+            (if (m.isEmpty()) CatalogProcessor.carryVersions(a, old) to CatalogProcessor.carryVersions(i, old) else a to i)
+                .let { (x, y) -> CatalogProcessor.withStars(x, stars, old) to CatalogProcessor.withStars(y, stars, old) }
         }
         upd { it.copy(apps = apps, importedApps = imp) }
         loading = false; refreshing = false; scheduleInstalledSync()
@@ -719,14 +754,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun beginVerify(app: AppItem) { installingId = null; scanningId = app.id; viewModelScope.launch { verify(app) } }
 
     private suspend fun verify(app: AppItem) {
-        val k = normalizePackageName(app.packageName); val exp = expectations[k]?.version
+        val k = normalizePackageName(app.packageName); val exp = expectations[k]?.version; val before = s.installedVersions[app.id]
         val max = if (!exp.isNullOrEmpty() && isComparableVersion(exp)) 12 else 8; val t0 = now()
         repeat(max) {
             delay(1000)
             val (inst, ver) = syncTargets(listOf(app))[app.id] ?: (false to "")
-            if (inst && (exp.isNullOrEmpty() || !isComparableVersion(exp) || compareVersions(ver, exp) >= 0)) {
+            // A changed versionName also counts: Nightly and Beta builds often name themselves unlike their catalog version
+            if (inst && (exp.isNullOrEmpty() || !isComparableVersion(exp) || compareVersions(ver, exp) >= 0 || (ver.isNotEmpty() && ver != before))) {
                 delay(maxOf(0, 2500 - (now() - t0)))
-                set { st -> st.copy(lastRemoteVersions = if (ver.isNotEmpty()) st.lastRemoteVersions + (app.id to ver) else st.lastRemoteVersions, packageOwners = if (k.isNotEmpty()) st.packageOwners + (k to app.id) else st.packageOwners) }
+                set { st -> st.copy(lastRemoteVersions = if (ver.isNotEmpty()) st.lastRemoteVersions + (app.id to ver) else st.lastRemoteVersions,
+                    installedBuilds = if (ver.isNotEmpty() && !exp.isNullOrEmpty()) st.installedBuilds + (app.id to InstalledBuild(ver, exp)) else st.installedBuilds, packageOwners = if (k.isNotEmpty()) st.packageOwners + (k to app.id) else st.packageOwners) }
                 expectations -= k
                 d.readyToInstall[app.id]?.let { file ->
                     upd { it.recordInstalled(app.id, ver, file, now()).copy(readyToInstall = it.readyToInstall - app.id, pendingCleanup = if (app.id in it.pendingCleanup) it.pendingCleanup else it.pendingCleanup + (app.id to CleanupEntry(file, now()))) }
@@ -831,11 +868,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val elevated = dhizuku || (s.useShizuku || s.rootMode) && tracker.elevatedReady()
         if (elevated && !confirmed) { uninstallAsk = app; haptic(H.WARNING); return@launch }
         haptic(H.MEDIUM)
+        if (removeApp(app, pkg, dhizuku, elevated)) { toast("${app.name} uninstalled"); haptic(H.SUCCESS) }
+    }
+
+    private suspend fun removeApp(app: AppItem, pkg: String, dhizuku: Boolean, elevated: Boolean): Boolean {
         val err = runCatching { when { dhizuku -> DhizukuBridge.uninstall(ctx, pkg); elevated -> tracker.uninstallSilent(pkg); else -> tracker.uninstallPrompt(pkg) } }.exceptionOrNull()
-        if (err != null) { error(err.message ?: "Uninstall failed"); return@launch }
+        if (err != null) { error(err.message ?: "Uninstall failed"); return false }
         delay(300)
-        if (withContext(Dispatchers.IO) { tracker.appInfo(pkg).installed }) return@launch
-        syncApp(app).join(); toast("${app.name} uninstalled"); haptic(H.SUCCESS)
+        if (withContext(Dispatchers.IO) { tracker.appInfo(pkg).installed }) return false
+        syncApp(app).join(); return true
+    }
+
+    /** Several apps from My Apps, one after another: silent with root, Shizuku or Dhizuku, otherwise one system prompt each. */
+    var uninstallManyAsk by mutableStateOf<List<AppItem>?>(null)
+    fun uninstallMany(apps: List<AppItem>) = viewModelScope.launch {
+        val dhizuku = s.useDhizuku && !s.rootMode && DhizukuBridge.granted(ctx)
+        val elevated = dhizuku || (s.useShizuku || s.rootMode) && tracker.elevatedReady()
+        haptic(H.MEDIUM)
+        val done = apps.count { a -> (s.resolvedPackageNames[a.id] ?: a.packageName)?.takeIf { it.isNotBlank() }?.let { removeApp(a, it, dhizuku, elevated) } == true }
+        if (done > 0) { toast(if (done == 1) "1 app uninstalled" else "$done apps uninstalled"); haptic(H.SUCCESS) }
     }
 
     fun batchInstall() = viewModelScope.launch {
@@ -913,6 +964,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun deepLink(uri: Uri?) {
         if (uri?.scheme != "orionstore") return
         val seg = (listOfNotNull(uri.host) + uri.pathSegments).filter { it.isNotEmpty() }
+        if (seg.getOrNull(0) == "settings") { openSettings(seg.getOrNull(1) ?: "none"); return }
         if (seg.getOrNull(0) != "app" || seg.getOrNull(1) == null) return
         val id = Uri.decode(seg[1])
         whenLoaded { openById(id, "not found in Orion Store") }
@@ -927,6 +979,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun whenLoaded(open: () -> Unit) { if (lookup.isEmpty()) pendingDeepLink = open else open() }
+
+    /** Any APK on the phone, opened on the installer sheet. */
+    fun pickApk() = viewModelScope.launch {
+        val u = com.orion.store.platform.ResultHost.run(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/vnd.android.package-archive")).second?.data ?: return@launch
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, u, ctx, ApkInstallActivity::class.java).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
 
     fun openSettings(menu: String = "none") { settingsMenu = menu; if (Overlay.SETTINGS !in overlays) overlays += Overlay.SETTINGS }
     fun open(o: Overlay) { if (o !in overlays) overlays += o }

@@ -77,7 +77,7 @@ fun StoreTab(vm: MainViewModel, platform: String, contentPadding: PaddingValues)
     Box(Modifier.fillMaxSize()) {
         PullToRefreshBox(vm.refreshing, vm::reload, Modifier.fillMaxSize(), state = ptr,
             indicator = { PtrIndicator(ptr, vm.refreshing, s.pullToRefreshCharacter, Modifier.align(Alignment.TopCenter)) }) {
-            LazyVerticalGrid(GridCells.Adaptive(if (s.compactMode) 78.dp else 100.dp), Modifier.fillMaxSize(), grid, contentPadding,
+            LazyVerticalGrid(GridCells.Adaptive(if (s.compactMode) 78.dp else 100.dp), Modifier.fillMaxSize().wrapContentWidth().widthIn(max = 1200.dp), grid, contentPadding,
                 horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 item("header", span = full) { Header(vm) }
                 item("filters", span = full) { Filters(vm, ts, cats, visible.size, platform, modern) }
@@ -357,6 +357,7 @@ private fun LazyGridScope.collection(vm: MainViewModel, c: StoreCollection, inde
             val total = c.totalAppCount ?: c.apps.size
             if (total > c.apps.size) item(c.id + "-all", span = full) { MoreButton("Show all $total apps", vm::showAll) }
         }
+        CollectionType.RANKED -> if (c.apps.isNotEmpty()) item(c.id, span = full) { Ranked(vm, c, Modifier.reveal(index)) }
         CollectionType.SWIMLANE -> if (c.apps.isNotEmpty()) item(c.id, span = full) {
             when (c.id) { "updates-available" -> UpdateDeck(vm, c, Modifier.reveal(index)); "recommended_daily" -> Recommended(vm, c, Modifier.reveal(index)); else -> Swimlane(vm, c, Modifier.reveal(index)) }
         }
@@ -370,7 +371,10 @@ private fun Hero(vm: MainViewModel, c: StoreCollection, modifier: Modifier) = Co
     LaunchedEffect(pager, n) {
         if (n > 1 && !s.calm) while (true) { delay(5500); if (!pager.isScrollInProgress) pager.animateScrollToPage((pager.currentPage + 1) % n, animationSpec = glide) }
     }
-    HorizontalPager(pager, Modifier.fillMaxWidth().height(176.dp), contentPadding = PaddingValues(horizontal = 16.dp), pageSpacing = 10.dp, key = { c.apps[it].id }) { i ->
+    // On tablets and unfolded foldables the cards keep a phone card's proportions and the next ones peek in, instead of one card stretched edge to edge
+    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 600
+    HorizontalPager(pager, Modifier.fillMaxWidth().height(176.dp), contentPadding = PaddingValues(horizontal = 16.dp), pageSpacing = 10.dp, key = { c.apps[it].id },
+        pageSize = if (wide) androidx.compose.foundation.pager.PageSize.Fixed(480.dp) else androidx.compose.foundation.pager.PageSize.Fill) { i ->
         HeroCard(vm, c.apps[i], c.id) { pager.getOffsetDistanceInPages(i).coerceIn(-1f, 1f) }
     }
     if (n > 1) Row(Modifier.align(Alignment.CenterHorizontally).padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -422,6 +426,47 @@ private fun Swimlane(vm: MainViewModel, c: StoreCollection, modifier: Modifier) 
     SectionTitle(c.title, subtitle = c.subtitle, onMore = when { all -> ({ vm.showCollectionAll(c) }); c.filter != null -> ({ vm.categoryNavigate(c.filter) }); else -> null })
     LazyRow(contentPadding = PaddingValues(horizontal = 12.dp)) {
         items(c.apps, key = { it.id }) { AppTile(vm, it, c.id, width = if (LocalS.current.compactMode) 84.dp else 100.dp) }
+    }
+}
+
+/** 12.3k style, for star counts. */
+fun compactCount(n: Int): String = when {
+    n < 1000 -> "$n"
+    n < 1_000_000 -> "%.1fk".format(java.util.Locale.US, n / 1000.0).replace(".0k", "k")
+    else -> "%.1fM".format(java.util.Locale.US, n / 1_000_000.0).replace(".0M", "M")
+}
+
+private val RANK_SHAPES = listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Cookie7Sided, MaterialShapes.Cookie6Sided, MaterialShapes.Sunny, MaterialShapes.Clover4Leaf, MaterialShapes.Pentagon)
+
+/** A chart in columns of three: rank on an M3 shape, icon, name and stars. */
+@Composable
+private fun Ranked(vm: MainViewModel, c: StoreCollection, modifier: Modifier) = Column(modifier.padding(top = 20.dp)) {
+    val cs = MaterialTheme.colorScheme
+    SectionTitle(c.title, subtitle = c.subtitle)
+    LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
+        itemsIndexed(c.apps.chunked(3), key = { i, _ -> i }) { col, group ->
+            Column(Modifier.width(296.dp)) {
+                group.forEachIndexed { k, app ->
+                    val rank = col * 3 + k; val top = rank < 3
+                    Row(Modifier.fillMaxWidth().springClick { vm.selectApp(app, c.id) }.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(32.dp).background(if (top) cs.primaryContainer else cs.surfaceContainerHigh, RANK_SHAPES[rank % RANK_SHAPES.size].toShape()), contentAlignment = Alignment.Center) {
+                            Text("${rank + 1}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (top) cs.onPrimaryContainer else cs.onSurfaceVariant)
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        AppIcon(app, 52.dp, from = c.id)
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text(app.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Sym.StarFilled, null, Modifier.size(14.dp), tint = cs.tertiary); Spacer(Modifier.width(4.dp))
+                                Text(compactCount(app.stars ?: 0), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, maxLines = 1)
+                                if (app.category.isNotEmpty()) Text(" · ${app.category}", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

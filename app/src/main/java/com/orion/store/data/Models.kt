@@ -53,6 +53,8 @@ val STREAMS = listOf("Stable", "Beta", "Alpha", "Nightly")
     val screenshots: List<String> = emptyList(),
     val officialSite: String? = null,
     val patches: List<String> = emptyList(),
+    /** GitHub stars from the data branch's stars.json, null when unknown. */
+    val stars: Int? = null,
 )
 
 @Serializable data class SocialLinks(val github: String = "", val x: String = "", val discord: String = "", val coffee: String = "")
@@ -93,7 +95,7 @@ val STREAMS = listOf("Stable", "Beta", "Alpha", "Nightly")
 data class BundleItem(val id: String, val title: String, val description: String, val appIds: List<String>, val apps: List<AppItem> = emptyList(), val color: String? = null, val badge: String? = null, val icon: String? = null, val monogram: String? = null)
 data class CategoryCard(val id: String, val label: String, val icon: String, val count: Int, val accent: String, val gradient: List<String>)
 
-enum class CollectionType { HERO, SWIMLANE, BUNDLE, RECOMMENDATION_BUNDLES, CATEGORY_CARDS, SORTED_GRID }
+enum class CollectionType { HERO, SWIMLANE, BUNDLE, RECOMMENDATION_BUNDLES, CATEGORY_CARDS, SORTED_GRID, RANKED }
 
 data class StoreCollection(
     val id: String, val title: String, val type: CollectionType, val subtitle: String? = null, val filter: String? = null,
@@ -106,6 +108,8 @@ object Defaults {
     const val NETWORK_TIMEOUT_MS = 8000L
     const val RELEASES_API = "https://api.github.com/repos/RookieEnough/Orion-Store/releases?per_page=8"
     const val MIRROR_JSON = "https://raw.githubusercontent.com/RookieEnough/Orion-Data/data/mirror.json"
+    /** owner/repo (lowercase) to GitHub stars, built by the mirror workflow so the app never spends API calls on it. */
+    const val STARS_JSON = "https://raw.githubusercontent.com/RookieEnough/Orion-Data/data/stars.json"
     /** GitHub first, then two CDNs that serve the same files for networks blocking raw.githubusercontent.com. */
     val CONFIG_URLS = listOf(
         "https://raw.githubusercontent.com/RookieEnough/Orion-Data/main/config.json",

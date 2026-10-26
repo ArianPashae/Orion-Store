@@ -1,6 +1,7 @@
 package com.orion.store
 
 import com.orion.store.data.*
+import com.orion.store.platform.Verifier
 import com.orion.store.ui.bundleIssueBody
 import com.orion.store.ui.cleanPermName
 import com.orion.store.ui.isProfane
@@ -10,6 +11,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LogicTest {
+    @Test fun verifierCommands() {
+        // Every destructive command must stay scoped to the current user: a bare pm disable/uninstall would hit all users and can brick.
+        Verifier.DISABLE_CMDS.filter { it.startsWith("pm ") }.forEach { assertTrue(it, "--user 0" in it) }
+        assertTrue(Verifier.UNINSTALL_CMD.contains("--user 0") && Verifier.UNINSTALL_CMD.endsWith(Verifier.PKG))
+        // Documented global keys, set to their off values
+        assertTrue(Verifier.DISABLE_CMDS.contains("settings put global package_verifier_enable 0"))
+        assertTrue(Verifier.DISABLE_CMDS.contains("settings put global verifier_verify_adb_installs 0"))
+        assertTrue(Verifier.DISABLE_CMDS.last().endsWith(Verifier.PKG))
+    }
+
     @Test fun versions() {
         assertEquals("1.2.3", normalizeVersion("v1.2.3-beta+5"))
         assertTrue(compareVersions("1.10", "1.9") > 0)
@@ -174,5 +185,17 @@ class LogicTest {
         assertTrue(isProfane("b4d guy", listOf("bad")))
         assertFalse(isProfane("good", listOf("bad")))
         assertEquals("FINE LOCATION", cleanPermName("android.permission.ACCESS_FINE_LOCATION"))
+    }
+
+    @Test fun betaInstallIsNotAnUpdateFromStable() {
+        val beta = VersionOption("Beta", "20261020", variants = listOf(AppVariant("Universal", "u")))
+        val stable = VersionOption("Stable", "1.5.0", variants = listOf(AppVariant("Universal", "s")))
+        val app = AppItem(id = "x", availableVersions = listOf(stable, beta))
+        // Installed the Beta (names itself 1.4.2) through Orion: no update on its own channel, a new Beta is one
+        assertFalse(hasAvailableUpdate(app, "1.4.2", "Beta", InstalledBuild("1.4.2", "20261020")))
+        assertTrue(hasAvailableUpdate(app.copy(availableVersions = listOf(stable, beta.copy(version = "20261101"))), "1.4.2", "Beta", InstalledBuild("1.4.2", "20261020")))
+        // No record: an exact catalog name still counts as that build
+        assertFalse(hasAvailableUpdate(app, "20261020", "Beta"))
+        assertTrue(hasAvailableUpdate(app, "1.4.0", "Stable"))
     }
 }

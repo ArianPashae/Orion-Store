@@ -164,12 +164,40 @@ object WirelessAdb {
 
     suspend fun install(ctx: Context, f: File) = withContext(Dispatchers.IO) {
         val cmd = "pm install -r -S ${f.length()}"
+        val pi = runCatching { ctx.packageManager.getPackageArchiveInfo(f.absolutePath, 0) }.getOrNull()
+        val t0 = System.currentTimeMillis()
         connect(ctx)
-        val out = try { exec(mgr(ctx), cmd, f) } catch (_: Exception) {
-            // Stale socket after a Wi-Fi drop or adbd restart: reconnect once
-            runCatching { mgr(ctx).disconnect() }; connect(ctx); exec(mgr(ctx), cmd, f)
+        // adbd sometimes leaves the stream open after pm prints Success, so the reply never ends. The package itself says when it landed.
+        val reply = CompletableDeferred<Result<String>>()
+        scope.launch {
+            reply.complete(runCatching {
+                try { exec(mgr(ctx), cmd, f) } catch (e: Exception) {
+                    if (reply.isCompleted) throw e
+                    // Stale socket after a Wi-Fi drop or adbd restart: reconnect once
+                    runCatching { mgr(ctx).disconnect() }; connect(ctx); exec(mgr(ctx), cmd, f)
+                }
+            })
         }
+        fun landed() = pi != null && runCatching {
+            val p = ctx.packageManager.getPackageInfo(pi.packageName, 0)
+            p.lastUpdateTime >= t0 - 2000 && androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(p) == androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(pi)
+        }.getOrDefault(false)
+        val out = withTimeoutOrNull(5 * 60_000L) {
+            while (!reply.isCompleted) {
+                delay(700)
+                if (landed()) { reply.complete(Result.success("Success")); runCatching { mgr(ctx).disconnect() } } // frees the hung stream; the next call reconnects on the saved port
+            }
+            reply.await().getOrThrow()
+        } ?: if (landed()) "Success" else throw NativeError("Wireless debugging stopped answering. Try again.")
         if ("Success" !in out) throw NativeError(out.trim().ifEmpty { "INSTALL_FAILED" })
+    }
+
+    /** Runs one shell command over ADB as the shell user, reconnecting once on a stale socket. */
+    suspend fun shell(ctx: Context, cmd: String): String = withContext(Dispatchers.IO) {
+        connect(ctx)
+        try { exec(mgr(ctx), cmd) } catch (_: Exception) {
+            runCatching { mgr(ctx).disconnect() }; connect(ctx); exec(mgr(ctx), cmd)
+        }
     }
 
     // ---------------- Guided setup ----------------

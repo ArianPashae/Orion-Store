@@ -182,6 +182,17 @@ object CatalogProcessor {
     }
     // endregion
 
+    private val GH_REPO = Regex("github\\.com/([^/\\s]+/[^/\\s#?]+)", RegexOption.IGNORE_CASE)
+    fun githubKey(a: AppItem): String? = (a.githubRepo?.takeIf { it.isNotBlank() }?.removePrefix("https://github.com/") ?: a.repoUrl?.let { GH_REPO.find(it)?.groupValues?.get(1) })
+        ?.removeSuffix("/")?.removeSuffix(".git")?.trim('/')?.lowercase()?.takeIf { '/' in it }
+
+    /** Stars from [stars]; when that file could not be fetched, each app keeps the count it had. */
+    fun withStars(apps: List<AppItem>, stars: Map<String, Int>?, old: List<AppItem>): List<AppItem> {
+        val prev = if (stars == null) old.filter { it.stars != null }.associate { it.id to it.stars } else emptyMap()
+        if (stars.isNullOrEmpty() && prev.isEmpty()) return apps
+        return apps.map { a -> a.copy(stars = if (stars != null) githubKey(a)?.let(stars::get) else prev[a.id]) }
+    }
+
     fun process(rawApps: JsonElement?, mirror: Map<String, List<Release>>): List<AppItem> =
         (rawApps as? JsonArray).orEmpty().mapNotNull(::sanitizeApp).map { processItem(it, mirror) }
 
@@ -284,6 +295,19 @@ object CatalogProcessor {
         while (ii < inter.size && inter[ii].first <= 0) out += inter[ii++].second
         rows.forEachIndexed { n, r -> out += r; while (ii < inter.size && n + 1 >= inter[ii].first) out += inter[ii++].second }
         while (ii < inter.size) out += inter[ii++].second
+        // Most and least starred, three category rows after the bundles (or the end of the rows when there are none)
+        val starred = apps.filter { (it.stars ?: 0) > 0 }.sortedByDescending { it.stars }
+        if (starred.size >= 12) {
+            val b = out.indexOfFirst { it.type == CollectionType.RECOMMENDATION_BUNDLES }
+            var at = if (b < 0) out.size else b + 1; var cats = 0
+            while (at < out.size && cats < 3) { if (out[at].id.startsWith("cat_")) cats++; at++ }
+            val top = starred.take(12); val topIds = top.map { it.id }.toSet()
+            out.addAll(at, listOfNotNull(
+                StoreCollection("most_popular", "Most popular", CollectionType.RANKED, "The most starred on GitHub", apps = top),
+                starred.asReversed().filter { it.id !in topIds }.take(12).takeIf { it.size >= 6 }
+                    ?.let { StoreCollection("hidden_gems", "Hidden gems", CollectionType.RANKED, "Fewest stars, worth a look", apps = it) },
+            ))
+        }
         shuffle(byTag.keys.toList(), seed + 2).take(2).forEach { t -> byTag.getValue(t).takeIf { it.size >= 3 }?.let { out += StoreCollection("tag_${t.lowercase()}", "Curated: $t", CollectionType.SWIMLANE, filter = t, apps = it.take(12)) } }
         return out
     }

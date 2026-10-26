@@ -57,6 +57,9 @@ class OrionActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) { Store.settings.flow.map { it.highRefreshRate || it.perf == "boost" }.distinctUntilChanged().collect { vm.tracker.setHighRefreshRate(this@OrionActivity, it) } }
         }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) { Store.settings.flow.map { it.immersive }.distinctUntilChanged().collect { applyBars(it) } }
+        }
         if (savedInstanceState == null) handle(intent)
         setContent { OrionRoot(vm) }
         // Compose paints every pixel from the first frame on, so the window background underneath is never seen: drop it to save a full-screen fill per frame
@@ -69,13 +72,15 @@ class OrionActivity : ComponentActivity() {
     override fun onStart() { super.onStart(); AutoUpdate.uiVisible = true }
     override fun onStop() { AutoUpdate.uiVisible = false; super.onStop() }
 
-    // Full screen: status bar stays hidden, a swipe from the top peeks it. Re-applied on focus since old APIs drop the flag.
+    // Full screen (Settings, on by default): status bar hidden, a swipe from the top peeks it. Re-applied on focus since old APIs drop the flag.
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) WindowCompat.getInsetsController(window, window.decorView).run {
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.statusBars())
-        }
+        if (hasFocus) applyBars(Store.settings.flow.value.immersive)
+    }
+
+    private fun applyBars(immersive: Boolean) = WindowCompat.getInsetsController(window, window.decorView).run {
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (immersive) hide(WindowInsetsCompat.Type.statusBars()) else show(WindowInsetsCompat.Type.statusBars())
     }
 
     override fun onDestroy() { if (ResultHost.launch != null && isFinishing) ResultHost.launch = null; super.onDestroy() }
