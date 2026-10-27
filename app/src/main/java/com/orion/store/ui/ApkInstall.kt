@@ -61,7 +61,7 @@ class ApkInstallActivity : ComponentActivity() {
     private var previousHost: ((Intent, (Int, Intent?) -> Unit) -> Unit)? = null
     /** What is inside the APK, read in the background while the sheet already shows; null until then (or when it can't be read). */
     private var insights by mutableStateOf<ApkInsights.Report?>(null); private var inspecting by mutableStateOf(false)
-    /** Install with options for this sheet: starts as the store's setting, picks start from the last ones used. */
+    /** Beyond install for this sheet: starts as the store's setting, picks start from the last ones used. */
     private var optsOn by mutableStateOf(false); private var opts by mutableStateOf(emptySet<String>()); private var optInstaller by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,7 +135,7 @@ class ApkInstallActivity : ComponentActivity() {
         else -> null
     }
 
-    /** Install with options runs pm install with switches: root, Shizuku or wireless debugging can, Dhizuku and Android's installer can't. */
+    /** Beyond install runs pm install with switches: root, Shizuku or wireless debugging can, Dhizuku and Android's installer can't. */
     private fun optionRoute(s: Settings): String? = when {
         s.rootMode -> "root"
         s.useShizuku || tracker.elevatedReady() -> "shizuku"
@@ -204,7 +204,7 @@ class ApkInstallActivity : ComponentActivity() {
                                 if (!r.runsHere) Note(Sym.ErrorOutline, "Not built for this phone", "It only carries ${r.abis.joinToString()} code; this phone needs ${android.os.Build.SUPPORTED_ABIS.first()}.", cs.errorContainer, cs.onErrorContainer)
                             }
                             val r = route(s)
-                            if (optsOn && optR != null) Note(Sym.Tune, "Install with options", "Installs through ${when (optR) { "root" -> "root"; "shizuku" -> "Shizuku"; else -> "wireless debugging" }} with the switches below.", cs.secondaryContainer, cs.onSecondaryContainer)
+                            if (optsOn && optR != null) Note(Sym.Tune, "Beyond install", "Installs through ${when (optR) { "root" -> "root"; "shizuku" -> "Shizuku"; else -> "wireless debugging" }} with the switches below.", cs.secondaryContainer, cs.onSecondaryContainer)
                             else if (r != null) Note(Sym.Bolt, "Fast install", r.second, cs.secondaryContainer, cs.onSecondaryContainer)
                             else if (WirelessAdb.supported) Note(Sym.Schedule, "Skip the 24-hour wait", "Android may hold apps from unverified developers for a day. Turn on Skip the 24-hour wait in Orion's settings to install them right away.",
                                 cs.surfaceContainerHigh, cs.onSurface) { TextButton({ startActivity(Intent(this@ApkInstallActivity, OrionActivity::class.java).setData("orionstore://settings/installer".toUri())); finish() }) { Text("Set up") } }
@@ -214,7 +214,7 @@ class ApkInstallActivity : ComponentActivity() {
                                     Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Icon(Sym.Tune, null, Modifier.size(22.dp)); Spacer(Modifier.width(12.dp))
                                         Column(Modifier.weight(1f)) {
-                                            Text("Install with options", style = MaterialTheme.typography.titleSmall)
+                                            Text("Beyond install", style = MaterialTheme.typography.titleSmall)
                                             Text(if (need.isNotEmpty() && !optsOn) "This APK needs ${need.joinToString { id -> INSTALL_OPTIONS.first { it.id == id }.label.lowercase() }}" else "Downgrade, grant permissions, Play Store install and more",
                                                 style = MaterialTheme.typography.bodySmall, color = if (need.isNotEmpty() && !optsOn) cs.tertiary else cs.onSurfaceVariant)
                                         }
@@ -355,7 +355,7 @@ class ApkInstallActivity : ComponentActivity() {
         Section("Compatibility") {
             Line("Minimum", "Android ${ApkInsights.androidName(r.minSdk)} (API ${r.minSdk})", warn = r.minSdk > sdk, sub = if (r.minSdk > sdk) "This phone runs Android ${ApkInsights.androidName(sdk)}" else null)
             Line("Target", "Android ${ApkInsights.androidName(r.targetSdk)} (API ${r.targetSdk})", warn = sdk >= 34 && r.targetSdk < 24,
-                sub = if (sdk >= 34 && r.targetSdk < 24) "Android blocks apps this old. Install with options has Bypass target SDK block" else null)
+                sub = if (sdk >= 34 && r.targetSdk < 24) "Android blocks apps this old. Beyond install has Bypass target SDK block" else null)
             if (r.compileSdk > 0) Line("Compiled with", "API ${r.compileSdk}")
             Line("Processor", if (r.abis.isEmpty()) "Any" else r.abis.joinToString { abiShort(it) }, warn = !r.runsHere,
                 sub = if (r.abis.isEmpty()) "No native code, so it runs on every phone" else if (r.runsHere) "Runs on this phone (${phone.filter { it in r.abis }.joinToString { abiShort(it) }})" else "Won't run on this phone")
@@ -364,7 +364,7 @@ class ApkInstallActivity : ComponentActivity() {
                     sub = if (ok) "Every 64-bit library works on Android 15+ phones with 16 KB memory pages" else "Phones with 16 KB pages run it in compatibility mode or refuse it: ${r.unaligned.joinToString { it.name }.take(160)}")
             }
             if (r.debuggable || r.testOnly) Line("Build", listOfNotNull("Debuggable".takeIf { r.debuggable }, "Test only".takeIf { r.testOnly }).joinToString(" · "), warn = true,
-                sub = if (r.testOnly) "Needs Allow test builds in Install with options" else null)
+                sub = if (r.testOnly) "Needs Allow test builds in Beyond install" else null)
         }
         Section("Trackers") {
             if (r.trackers.isEmpty()) Text("None of the known tracker SDKs were found in its code.", style = ty.bodyMedium)

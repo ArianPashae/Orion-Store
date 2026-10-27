@@ -450,7 +450,7 @@ fun SettingsScreen(vm: MainViewModel) {
                                         .onFailure { shizukuError = it.message ?: "Dhizuku is not available." }
                                 }
                             }
-                            Toggle(Sym.Tune, "Install with options", "Choose downgrade, permissions, Play Store install and more before each install. Uses Shizuku or root.", s.installOptions) {
+                            Toggle(Sym.Tune, "Beyond install", "Choose downgrade, permissions, Play Store install and more before each install. Uses Shizuku or root.", s.installOptions) {
                                 shizukuError = null
                                 if (!vm.s.installOptions && !vm.s.rootMode) scope.launch {
                                     try { vm.tracker.requestElevated(); vm.set { it.copy(installOptions = true) } }

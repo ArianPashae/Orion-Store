@@ -743,7 +743,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Developer page: the author, and the app page it was opened from (it closes once another app opens). */
     var devProfile by mutableStateOf<Pair<String, String?>?>(null)
 
-    /** Install with options: the APK waiting on the options sheet. */
+    /** Beyond install: the APK waiting on the options sheet. */
     var installAsk by mutableStateOf<Pair<AppItem, String>?>(null)
 
     /** [opts]: pm install options picked on the options sheet, which always installs through root or Shizuku. */

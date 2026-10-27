@@ -165,7 +165,7 @@ object WirelessAdb {
         s.openInputStream().bufferedReader().readText()
     }
 
-    /** [opts]: Install with options picks; the shell user may pass every pm install switch, same as root and Shizuku. */
+    /** [opts]: Beyond install picks; the shell user may pass every pm install switch, same as root and Shizuku. */
     suspend fun install(ctx: Context, f: File, opts: Collection<String>? = null) = withContext(Dispatchers.IO) {
         val cmd = "pm install -r${opts?.let { com.orion.store.data.installArgs(it, Build.VERSION.SDK_INT, "") }.orEmpty()} -S ${f.length()}"
         val pi = runCatching { ctx.packageManager.getPackageArchiveInfo(f.absolutePath, 0) }.getOrNull()

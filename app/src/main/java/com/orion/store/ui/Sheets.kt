@@ -819,13 +819,13 @@ fun InstallOptionsList(on: Set<String>, installer: String, onChange: (Set<String
 fun pickedOptions(on: Set<String>, installer: String) =
     on.filter { id -> INSTALL_OPTIONS.any { it.id == id && android.os.Build.VERSION.SDK_INT >= it.minSdk } } + listOfNotNull(installer.takeIf { "installer" in on && it.isNotEmpty() }?.let { "installer=$it" })
 
-/** Install with options: pm install switches for one APK, last picks preselected. Installs through root or Shizuku. */
+/** Beyond install: pm install switches for one APK, last picks preselected. Installs through root or Shizuku. */
 @Composable
 fun InstallOptionsSheet(vm: MainViewModel, app: AppItem, file: String, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
     val s = LocalS.current; val close = LocalSheetClose.current; val cs = MaterialTheme.colorScheme
     var on by remember { mutableStateOf(s.installFlags.filterNot { it.startsWith("installer=") }.toSet()) }
     var installer by remember { mutableStateOf(s.installFlags.firstOrNull { it.startsWith("installer=") }?.substringAfter('=').orEmpty()) }
-    SheetTitle("Install options", Sym.Tune, app.name)
+    SheetTitle("Beyond install", Sym.Tune, app.name)
     Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         InstallOptionsList(on, installer, { on = it }, { installer = it }) { vm.haptic(H.SELECTION) }
