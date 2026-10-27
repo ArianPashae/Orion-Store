@@ -482,6 +482,15 @@ fun SettingsScreen(vm: MainViewModel) {
                                 SRow(Sym.DeleteSweep, "Clear every app's cache", "Free space across all apps in one tap", onClick = vm::trimCaches) { Chevron() }
                             }
                         }
+                        Section("Sideloading protection") {
+                            val vs = vm.verifierState
+                            SRow(if (vs == com.orion.store.platform.Verifier.State.ACTIVE) Sym.GppBad else Sym.GppGood, "Developer verification", when (vs) {
+                                com.orion.store.platform.Verifier.State.ACTIVE -> "On. Tap to turn it off with Secure me"
+                                com.orion.store.platform.Verifier.State.OFF -> "Off, sideloading is protected. Tap to revert"
+                                else -> "Not on this phone"
+                            }, onClick = { vm.haptic(H.LIGHT); vm.openVerifier() }) { Chevron() }
+                            Toggle(Sym.Shield, "Protection shield", "Show the shield in the header. It opens Secure me and Revert in one tap", s.verifierBadge) { vm.set { it.copy(verifierBadge = !it.verifierBadge) } }
+                        }
                         Section("Recovery") {
                             SRow(Sym.Sync, "Force rescan packages", "Reload every installed app list", onClick = { vm.reload(); vm.scheduleInstalledSync(); vm.close(Overlay.SETTINGS) })
                         }
@@ -1242,7 +1251,7 @@ private fun FontSheet(vm: MainViewModel, s: Settings, error: String?, importing:
 
 /** One-time guided setup for direct installs: Wi-Fi, Developer options, then pairing through the notification shade. */
 @Composable
-private fun DirectInstallSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
+internal fun DirectInstallSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
     val ctx = LocalContext.current; val close = LocalSheetClose.current
     val st by WirelessAdb.status.collectAsState()
     var wifi by remember { mutableStateOf(WirelessAdb.onWifi(ctx)) }; var dev by remember { mutableStateOf(WirelessAdb.devOptions(ctx)) }

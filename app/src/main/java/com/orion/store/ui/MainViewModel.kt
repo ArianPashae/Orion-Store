@@ -159,7 +159,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (flag("dock") == null) set { st -> st.copy(bottomNavScale = if (st.bottomNavScale == 1f) .85f else st.bottomNavScale, seenFlags = st.seenFlags + "dock=compact") }
         // 2.2.5: "About this app" previews start off; rows that never had the switch touched follow the new default once
         if (flag("about") == null) set { st -> st.copy(showAppAbout = false, seenFlags = st.seenFlags + "about=off") }
-        set { it.copy(launchCount = it.launchCount + 1) }
         // Tier badges follow the shared level, whichever XP source pushed it over
         viewModelScope.launch {
             combine(settings, data) { st, dt -> Xp.level(Xp.total(st, dt.appLibrary.size)) }.distinctUntilChanged().collect { lvl ->
@@ -267,14 +266,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // the forced update or maintenance screens, never over an open app, sheet or Settings.
     var welcomeOpen by mutableStateOf(false); var announceNow by mutableStateOf(false)
     var tour by mutableStateOf(false); var donateOpen by mutableStateOf(false); var guidePrompt by mutableStateOf(false)
-    /** Developer-verification popup: intro / working / done / failed. */
-    var verifierPrompt by mutableStateOf(false); var verifierState by mutableStateOf("intro"); var verifierError by mutableStateOf("")
+    /** Sideloading protection popup, one step at a time: intro / protected / working / failed / setup. [verifierState] is the phone's
+     *  component, read again on every resume, and drives the header shield. */
+    var verifierPrompt by mutableStateOf(false); var verifierStep by mutableStateOf("intro"); var verifierError by mutableStateOf("")
+    var verifierState by mutableStateOf(Verifier.State.ABSENT); var verifierReverting by mutableStateOf(false)
+    /** Wireless debugging setup opened from the popup; the popup comes back once it closes paired. */
+    var verifierSetup by mutableStateOf(false)
     /** Developer test run: "done" or "failed" plays that outcome without running a single command or touching the seen flag. */
     var verifierFake by mutableStateOf<String?>(null)
-    fun testVerifier(outcome: String) { verifierFake = outcome; verifierState = "intro"; verifierError = ""; verifierPrompt = true }
+    fun testVerifier(outcome: String) { verifierFake = outcome; verifierStep = "intro"; verifierError = ""; verifierPrompt = true }
+    fun refreshVerifier() { verifierState = Verifier.state(ctx) }
+    /** The popup on the step that fits the phone: Secure me while verification is on, Revert once it is off. */
+    fun openVerifier() {
+        refreshVerifier()
+        if (verifierState == Verifier.State.ABSENT && flag("verifier") != "secured") { toast("This phone has no developer verification to turn off"); return }
+        verifierFake = null; verifierError = ""; verifierReverting = false
+        verifierStep = if (verifierState == Verifier.State.ACTIVE) "intro" else "protected"; verifierPrompt = true
+    }
     private val turns = kotlinx.coroutines.sync.Mutex()
     private val screenFree get() = startupReady && !forcedBlocking && forcedTest == null && !((config?.maintenanceMode == true || s.localMaintenanceMode) && !bypassMaintenance) &&
-        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen && !donateNudge && !guidePrompt && !verifierPrompt &&
+        overlays.isEmpty() && selectedApp == null && selectedBundle == null && vtTarget == null && autoReport == null && !welcomeOpen && !announceNow && !donateOpen && !donateNudge && !guidePrompt && !verifierPrompt && !verifierSetup &&
         snackbar.currentSnackbarData == null
     // Polls every 400 ms: the gate mixes Compose state with the settings StateFlow. One boolean read, so it costs nothing
     private suspend fun untilFree() { while (!screenFree) delay(400) }
@@ -286,7 +297,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         while (!startupReady) delay(200)
         if (!s.seenNativeWelcome) takeTurn { welcomeOpen = true }
         autoReportTurn()
-        if (flag("verifier") == null && s.launchCount >= 6 && Verifier.active(ctx)) takeTurn { verifierState = "intro"; verifierPrompt = true }
+        // Offered once by itself; after that the header shield opens it
+        refreshVerifier()
+        if (flag("verifier") == null && verifierState == Verifier.State.ACTIVE) takeTurn { openVerifier() }
         withTimeoutOrNull(15_000) { while (loading || config == null) delay(300) }
         config?.notice?.takeIf { it.show && it.id != flag("notice") }?.let { takeTurn { open(Overlay.NOTICE) } }
         if (d.apps.isNotEmpty() && !s.hasSeenModernUITutorial && s.storeLayout == "classic") takeTurn { tour = false; open(Overlay.TUTORIAL) }
@@ -299,32 +312,64 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun finishWelcome() { set { it.copy(seenNativeWelcome = true) }; welcomeOpen = false }
 
-    /** Prefer an elevated shell (root/Shizuku); fall back to built-in wireless ADB, whose shell user is enough for these commands. */
-    private suspend fun verifierExec(cmd: String): String = when {
-        s.rootMode || tracker.elevatedReady() -> tracker.runPrivileged(cmd)
-        s.useShizuku -> { tracker.requestElevated(); tracker.runPrivileged(cmd) }
-        WirelessAdb.supported -> WirelessAdb.shell(ctx, cmd)
-        else -> throw NativeError("Turn on Root, Shizuku or Direct install in Settings first.")
+    /** Root or a granted Shizuku first, then built-in wireless ADB, whose shell user is enough for every command. Null when none is set up,
+     *  so the popup can offer the setup instead of failing. A route that is set up but not answering throws its own reason. */
+    private suspend fun verifierShell(): (suspend (String) -> String)? {
+        if (tracker.elevatedReady()) return { tracker.runPrivileged(it) }
+        if (s.useShizuku && runCatching { tracker.requestElevated() }.isSuccess && tracker.elevatedReady()) return { tracker.runPrivileged(it) }
+        if (!WirelessAdb.supported || !(s.directInstall || WirelessAdb.paired(ctx))) return null
+        WirelessAdb.connect(ctx)
+        return { WirelessAdb.shell(ctx, it) }
     }
 
-    fun secureDevice() = viewModelScope.launch {
-        verifierState = "working"; verifierError = ""
+    /** Runs the change one command at a time, then trusts only the phone: success means the component really is off (or back on). */
+    private fun runVerifier(revert: Boolean) = viewModelScope.launch {
+        verifierReverting = revert; verifierStep = "working"; verifierError = ""
         verifierFake?.let { f ->
             delay(2200)
-            if (f == "done") { verifierState = "done"; haptic(H.SUCCESS) }
-            else { verifierError = "This device blocked the change. Root or Shizuku may get through where ADB can't. (Test run, nothing was changed.)"; verifierState = "failed"; haptic(H.ERROR) }
+            if (f == "done") { verifierStep = if (revert) "intro" else "protected"; haptic(H.SUCCESS) }
+            else { verifierError = "Android refused the change: Cannot disable a protected package. (Test run, nothing was changed.)"; verifierStep = "failed"; haptic(H.ERROR) }
             return@launch
         }
-        val err = runCatching {
-            Verifier.DISABLE_CMDS.forEach { verifierExec(it) }
-            if (Verifier.active(ctx)) runCatching { verifierExec(Verifier.UNINSTALL_CMD) } // OEM blocked disable-user
-            if (Verifier.active(ctx)) throw NativeError("This device blocked the change. Root or Shizuku may get through where ADB can't.")
-        }.exceptionOrNull()
-        if (err == null) { verifierState = "done"; haptic(H.SUCCESS) }
-        else { verifierError = (err as? NativeError)?.message ?: err.message ?: "Couldn't secure this device."; verifierState = "failed"; haptic(H.ERROR) }
+        val sh = try { verifierShell() } catch (e: Exception) {
+            verifierError = (e as? NativeError)?.message ?: e.message ?: "Wireless debugging didn't answer."; verifierStep = "failed"; haptic(H.ERROR); return@launch
+        } ?: run { verifierStep = "setup"; haptic(H.LIGHT); return@launch }
+        val log = StringBuilder()
+        suspend fun run(cmd: String) = runCatching { sh(cmd) }.getOrElse { it.message.orEmpty() }.also { log.appendLine(it) }
+        withContext(Dispatchers.IO) {
+            if (!revert) {
+                // The originals are saved once, so a second Secure me never records Orion's own values
+                if (flag("verifierPrev") == null) setFlag("verifierPrev", Verifier.GLOBALS.map { (k, _) -> run("settings get global $k").trim().takeIf { it.matches(Regex("-?\\d+")) } ?: "null" }.joinToString("|"))
+                Verifier.GLOBALS.forEach { (k, v) -> run("settings put global $k $v") }
+                run(Verifier.DISABLE_CMD)
+                if (Verifier.active(ctx)) run(Verifier.UNINSTALL_CMD) // OEMs that block disable-user often still allow this
+            } else {
+                Verifier.RESTORE_CMDS.forEach { run(it) }
+                val prev = flag("verifierPrev")?.split("|")
+                Verifier.GLOBALS.forEachIndexed { i, (k, _) -> prev?.getOrNull(i)?.takeIf { it != "null" }?.let { run("settings put global $k $it") } ?: run("settings delete global $k") }
+            }
+        }
+        refreshVerifier()
+        val ok = if (revert) verifierState == Verifier.State.ACTIVE else verifierState != Verifier.State.ACTIVE
+        if (ok) {
+            if (revert) { set { st -> st.copy(seenFlags = st.seenFlags.filterNot { it.startsWith("verifierPrev=") }.toSet()) }; toast("Developer verification is back on") }
+            setFlag("verifier", if (revert) "seen" else "secured")
+            verifierStep = if (revert) "intro" else "protected"; haptic(H.SUCCESS)
+        } else {
+            val why = Verifier.refusal(log.toString())
+            verifierError = (if (why != null) "Android refused the change: $why." else if (revert) "Android kept developer verification off." else "This phone kept developer verification on.") +
+                if (!revert && !s.rootMode) " Root can get through where wireless debugging and Shizuku can't." else ""
+            verifierStep = "failed"; haptic(H.ERROR)
+        }
     }
 
-    fun finishVerifier() { if (verifierFake == null) setFlag("verifier", "seen"); verifierFake = null; verifierPrompt = false; verifierState = "intro"; verifierError = "" }
+    fun secureDevice() = runVerifier(false)
+    fun revertVerifier() = runVerifier(true)
+
+    /** Closing never hides protection: the header shield stays and opens this popup again. */
+    fun finishVerifier() { if (verifierFake == null && flag("verifier") == null) setFlag("verifier", "seen"); verifierFake = null; verifierPrompt = false; verifierStep = "intro"; verifierError = "" }
+    fun setupForVerifier() { verifierPrompt = false; verifierSetup = true }
+    fun verifierSetupClosed() { verifierSetup = false; if (s.directInstall) openVerifier() }
     fun dismissNotice() { config?.notice?.id?.let { setFlag("notice", it) }; overlays -= Overlay.NOTICE }
 
     fun flag(k: String) = s.seenFlags.firstOrNull { it.startsWith("$k=") }?.substringAfter('=')
@@ -343,6 +388,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pendingRetry?.let { (a, f) -> if (tracker.canRequestInstalls()) { pendingRetry = null; viewModelScope.launch { delay(500); installFile(a, f) } } }
         if (installingId == null && scanningId == null) scheduleInstalledSync()
         announceQuest(); cloudBackup(); reportAutoUpdates(); leaderboardSync()
+        refreshVerifier() // the user may have flipped it in system Settings meanwhile
     }
 
     /** What the background updater did while Orion was closed: a quiet toast when all went well, a report when something needs the user. */

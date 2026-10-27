@@ -149,8 +149,8 @@ import kotlin.math.max
     val aiLocalModel: String = "",
     val aiFabX: Float = -1f, val aiFabY: Float = -1f,
     @Transient val coinFlipHintCount: Int = 0,
-    /** Cold starts so far; the developer-verification popup waits for the 6th. */
-    val launchCount: Int = 0,
+    /** The sideloading-protection shield in the header, on whenever the phone has the developer-verification component. Off only from Orion Xtra. */
+    val verifierBadge: Boolean = true,
 ) {
     fun toggleHiddenTab(tab: String): Settings {
         val next = if (tab in hiddenTabs) hiddenTabs - tab else hiddenTabs + tab
