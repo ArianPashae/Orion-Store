@@ -686,9 +686,18 @@ private fun Hub(vm: MainViewModel, s: Settings, d: DataState, active: Int, ready
     val cs = MaterialTheme.colorScheme
     fun cat(id: String) = CATS.first { it.id == id }
     Column(Modifier.fillMaxSize().background(cs.surface).readableWidth().verticalScroll(rememberScrollState()).readableWidth().windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 32.dp)) {
-        Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp)) {
-            Text("Settings", style = MaterialTheme.typography.displaySmallEmphasized)
-            Text("Orion Store v$STORE_VERSION · ${vm.allApps().size} apps in catalog", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+        Row(Modifier.padding(start = 24.dp, end = 16.dp, top = 24.dp), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text("Settings", style = MaterialTheme.typography.displaySmallEmphasized)
+                Text("Orion Store v$STORE_VERSION · ${vm.allApps().size} apps in catalog", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+            }
+            // Announcements already read leave the header; the latest one stays readable here until a new one arrives
+            val ann = vm.config?.announcement?.takeIf { it.isNotBlank() }
+            var showAnn by remember { mutableStateOf(false) }
+            if (ann != null) IconButton({ vm.haptic(H.LIGHT); showAnn = true }) { Icon(Sym.Campaign, "Last announcement", tint = cs.onSurfaceVariant) }
+            if (showAnn && ann != null) AlertDialog({ showAnn = false }, icon = { Icon(Sym.Campaign, null) }, title = { Text("From the Orion team") },
+                text = { Text(ann, Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
+                confirmButton = { TextButton({ showAnn = false; vm.dismissAnnouncement() }) { Text("Got it") } })
         }
         var editing by remember { mutableStateOf(false) }
         HubHeader("Quick toggles") { IconButton({ editing = true }) { Icon(Sym.Edit, "Edit quick toggles", tint = cs.primary) } }

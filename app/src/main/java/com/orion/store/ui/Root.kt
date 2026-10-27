@@ -369,12 +369,14 @@ private fun ShieldButton(vm: MainViewModel) {
     }
 }
 
-/** Announcements arrive as a rich tooltip that drops from a megaphone in the search pill; the megaphone pulses while unread. */
+/** Announcements arrive as a rich tooltip that drops from a megaphone in the header; it pulses while unread and leaves after Got it. */
 @Composable
 private fun AnnouncementButton(vm: MainViewModel) {
     val ann = vm.config?.announcement?.takeIf { it.isNotBlank() } ?: return
     val cs = MaterialTheme.colorScheme
+    // Gone for good once read; only a new announcement brings it back. Old ones are read from Settings.
     val unread = !vm.announcementDismissed()
+    if (!unread) return
     val tip = rememberTooltipState(isPersistent = true)
     // The popup queue decides when the announcement drops; closing it hands the turn to the next popup
     LaunchedEffect(vm.announceNow) { if (vm.announceNow) { tip.show(); vm.announceNow = false } }

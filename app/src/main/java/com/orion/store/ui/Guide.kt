@@ -64,7 +64,7 @@ private val CHAPTERS = listOf(
         Feature(Sym.Description, "About this app previews", "Classic rows show the first lines of each description with See more to read the rest in place. Turn it off in Settings, Interface.", settings("interface")),
         Feature(Sym.Sell, "Category icons", "Every category wears its own icon on classic rows, so a long list scans at a glance."),
         Feature(Sym.SystemUpdate, "Update deck", "When updates are waiting, a slim strip on the Apps home shows who is waiting with a one-tap Update all."),
-        Feature(Sym.Campaign, "Announcements", "News from the Orion team drops from a megaphone next to Settings in the header, shown only while there is news. It pulses until you have read it."),
+        Feature(Sym.Campaign, "Announcements", "News from the Orion team drops from a megaphone next to Settings in the header. It pulses until you tap Got it, then leaves until a new announcement arrives. The last one stays readable from the megaphone at the top of Settings. It pulses until you have read it."),
         Feature(Sym.AutoFixHigh, "Pull to refresh characters", "Pull down to reload the catalog with a pixel cat, dog, owl, ghost and friends, or an expressive shape. Pick yours in Orion Xtra.", settings("installer")),
         Feature(Sym.KeyboardArrowUp, "Back to top", "A floating arrow appears once you scroll far down. One tap and you are back at the top."),
         Feature(Sym.AddCircleOutline, "Submit an app", "Suggest an app from GitHub, GitLab or Codeberg. Orion detects its name, package, description and category, accepts Obtainium exports and opens a ready GitHub issue.", { open(Overlay.SUBMISSION) }),
