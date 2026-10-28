@@ -278,6 +278,9 @@ fun Header(vm: MainViewModel) {
         }
         if (Device.isTv) TvBetaPill(vm)
         if (vm.tab == Tab.ABOUT) IconButton({ vm.haptic(H.LIGHT); vm.open(Overlay.GUIDE) }) { Icon(Sym.MenuBook, "Know Orion") }
+        // The pill carries the shield on store tabs; the Dev tab has no pill, so it sits here. The megaphone, when there is news, lives here too.
+        if (vm.tab == Tab.ABOUT) ShieldButton(vm)
+        else AnnouncementButton(vm)
         val dl = d.activeDownloads.size; val up = vm.updates.size
         IconButton({ vm.openSettings() }) {
             BadgedBox({
@@ -344,7 +347,7 @@ private fun SearchPill(vm: MainViewModel, scope: String) {
         AnimatedContent(q.isNotEmpty(), label = "trail") { typing ->
             if (typing) IconButton({ set("") }) { Icon(Sym.Close, "Clear search") }
             else Row {
-                AnnouncementButton(vm)
+                ShieldButton(vm)
                 val at = remember { mutableStateOf(Offset.Zero) }; val reveal = LocalThemeReveal.current
                 IconButton({ reveal?.run(at.value) { vm.toggleTheme() } ?: vm.toggleTheme() }, Modifier.trackCenter(at)) {
                     AnimatedContent(s.theme, label = "theme") { Icon(when (it) { "light" -> Sym.LightMode; "dusk" -> Sym.Brightness6; else -> Sym.DarkMode }, "Theme: $it, tap to change") }
@@ -354,12 +357,26 @@ private fun SearchPill(vm: MainViewModel, scope: String) {
     }
 }
 
-/** Announcements arrive as a rich tooltip that drops from a megaphone in the search pill; the megaphone pulses while unread. */
+/** Sideloading protection, always one tap away: crossed while Android's developer verification is on, checked once Orion turned it off.
+ *  Only the Orion Xtra switch hides it. */
+@Composable
+private fun ShieldButton(vm: MainViewModel) {
+    val s = LocalS.current; val cs = MaterialTheme.colorScheme
+    if (!s.verifierBadge || (vm.verifierState == com.orion.store.platform.Verifier.State.ABSENT && "verifier=secured" !in s.seenFlags)) return
+    val on = vm.verifierState != com.orion.store.platform.Verifier.State.ACTIVE
+    IconButton({ vm.haptic(H.LIGHT); vm.openVerifier() }) {
+        Icon(if (on) Sym.GppGood else Sym.GppBad, if (on) "Sideloading protected, tap to revert" else "Sideloading not protected", tint = if (on) cs.primary else cs.error)
+    }
+}
+
+/** Announcements arrive as a rich tooltip that drops from a megaphone in the header; it pulses while unread and leaves after Got it. */
 @Composable
 private fun AnnouncementButton(vm: MainViewModel) {
     val ann = vm.config?.announcement?.takeIf { it.isNotBlank() } ?: return
     val cs = MaterialTheme.colorScheme
+    // Gone for good once read; only a new announcement brings it back. Old ones are read from Settings.
     val unread = !vm.announcementDismissed()
+    if (!unread) return
     val tip = rememberTooltipState(isPersistent = true)
     // The popup queue decides when the announcement drops; closing it hands the turn to the next popup
     LaunchedEffect(vm.announceNow) { if (vm.announceNow) { tip.show(); vm.announceNow = false } }
@@ -433,6 +450,7 @@ private fun Overlays(vm: MainViewModel) {
     vm.autoReport?.let { log -> AutoReportDialog(vm, log) }
     if (vm.guidePrompt) GuidePromptDialog(vm)
     if (vm.verifierPrompt) VerifierDialog(vm)
+    if (vm.verifierSetup) DirectInstallSheet(vm) { vm.verifierSetupClosed() }
     vm.devProfile?.let { (dev, from) -> if (vm.selectedApp?.id == from) DevSheet(vm, dev) { vm.devProfile = null } else SideEffect { vm.devProfile = null } }
     if (vm.donateNudge) DonateNudgeDialog(vm)
     vm.installAsk?.let { (a, f) -> InstallOptionsSheet(vm, a, f) { vm.installAsk = null } }
@@ -482,40 +500,55 @@ private fun DonateNudgeDialog(vm: MainViewModel) {
         })
 }
 
-/** Offered once, on the 6th start, when Android's developer-verification component is detected. One tap turns it off; minimal by design. */
+/** Sideloading protection. Offered once by itself while Android's developer-verification component is on, then always reachable from the
+ *  header shield, which also reverts it in one tap. Taps outside never close it; only its buttons and Back do. */
 @Composable
 private fun VerifierDialog(vm: MainViewModel) {
     val cs = MaterialTheme.colorScheme
-    val state = vm.verifierState
-    val working = state == "working"; val done = state == "done"; val failed = state == "failed"
+    val step = vm.verifierStep; val revert = vm.verifierReverting
+    val working = step == "working"; val safe = step == "protected"; val failed = step == "failed"; val setup = step == "setup"
     AlertDialog({ if (!working) vm.finishVerifier() },
+        properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
         icon = {
             when {
                 working -> LoadingIndicator(Modifier.size(64.dp))
-                done -> MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Sunny), 0, 64.dp, cs.primaryContainer) { Icon(Sym.GppGood, null, Modifier.size(32.dp), tint = cs.onPrimaryContainer) }
+                safe -> MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Sunny), 0, 64.dp, cs.primaryContainer) { Icon(Sym.GppGood, null, Modifier.size(32.dp), tint = cs.onPrimaryContainer) }
                 else -> MorphBlob(listOf(MaterialShapes.Cookie9Sided, MaterialShapes.Heart), 0, 64.dp, if (failed) cs.errorContainer else cs.tertiaryContainer) {
-                    Icon(if (failed) Sym.GppMaybe else Sym.Shield, null, Modifier.size(32.dp), tint = if (failed) cs.onErrorContainer else cs.onTertiaryContainer)
+                    Icon(when { failed -> Sym.GppMaybe; setup -> Sym.Speed; else -> Sym.GppBad }, null, Modifier.size(32.dp), tint = if (failed) cs.onErrorContainer else cs.onTertiaryContainer)
                 }
             }
         },
-        title = { Text(when { working -> "Securing"; done -> "Protected"; failed -> "Couldn't secure"; else -> "Protect sideloading" }, style = MaterialTheme.typography.headlineSmallEmphasized) },
+        title = {
+            Text(when {
+                working -> if (revert) "Reverting" else "Securing"; safe -> "Protected"; failed -> if (revert) "Couldn't revert" else "Couldn't secure"
+                setup -> "One quick setup first"; else -> "Protect sideloading"
+            }, style = MaterialTheme.typography.headlineSmallEmphasized)
+        },
         text = {
             Text(when {
-                working -> "Switching off developer verification."
-                done -> "Developer verification is off. Installs stay instant."
+                working -> if (revert) "Switching developer verification back on." else "Switching off developer verification."
+                safe -> "Developer verification is off and sideloaded apps install freely. Changed your mind? Revert puts everything back as it was."
                 failed -> vm.verifierError
-                else -> "Android switched on developer verification, which can slow or block sideloaded apps. Orion can turn it off for you."
+                setup -> "Orion needs a way to run the change: root, Shizuku, or its built-in wireless debugging. Set up wireless debugging once and this popup comes back to finish."
+                else -> "Android switched on developer verification, which can slow or block sideloaded apps. Orion can turn it off for you, and undo it any time from the shield up top."
             })
         },
         confirmButton = {
             when {
                 working -> {}
-                done -> Button({ vm.finishVerifier() }, shapes = ButtonDefaults.shapes()) { Text("Done") }
-                failed -> Button({ vm.secureDevice() }, shapes = ButtonDefaults.shapes()) { Text("Try again") }
+                safe -> Button({ vm.finishVerifier() }, shapes = ButtonDefaults.shapes()) { Text("Done") }
+                failed -> Button({ if (revert) vm.revertVerifier() else vm.secureDevice() }, shapes = ButtonDefaults.shapes()) { Text("Try again") }
+                setup -> Button({ vm.setupForVerifier() }, shapes = ButtonDefaults.shapes()) { Text("Set up") }
                 else -> Button({ vm.secureDevice() }, shapes = ButtonDefaults.shapes()) { Text("Secure me") }
             }
         },
-        dismissButton = { if (!working && !done) TextButton({ vm.finishVerifier() }) { Text("Not now") } })
+        dismissButton = {
+            when {
+                working -> {}
+                safe -> TextButton({ vm.revertVerifier() }) { Text("Revert") }
+                else -> TextButton({ vm.finishVerifier() }) { Text(if (failed || setup) "Close" else "Not now") }
+            }
+        })
 }
 
 /** One-time hello for 2.2.0: points everyone at Know Orion. */

@@ -450,7 +450,7 @@ fun SettingsScreen(vm: MainViewModel) {
                                         .onFailure { shizukuError = it.message ?: "Dhizuku is not available." }
                                 }
                             }
-                            Toggle(Sym.Tune, "Install with options", "Choose downgrade, permissions, Play Store install and more before each install. Uses Shizuku or root.", s.installOptions) {
+                            Toggle(Sym.Tune, "Beyond install", "Choose downgrade, permissions, Play Store install and more before each install. Uses Shizuku or root.", s.installOptions) {
                                 shizukuError = null
                                 if (!vm.s.installOptions && !vm.s.rootMode) scope.launch {
                                     try { vm.tracker.requestElevated(); vm.set { it.copy(installOptions = true) } }
@@ -481,6 +481,15 @@ fun SettingsScreen(vm: MainViewModel) {
                                 }) { Chevron() }
                                 SRow(Sym.DeleteSweep, "Clear every app's cache", "Free space across all apps in one tap", onClick = vm::trimCaches) { Chevron() }
                             }
+                        }
+                        Section("Sideloading protection") {
+                            val vs = vm.verifierState
+                            SRow(if (vs == com.orion.store.platform.Verifier.State.ACTIVE) Sym.GppBad else Sym.GppGood, "Developer verification", when (vs) {
+                                com.orion.store.platform.Verifier.State.ACTIVE -> "On. Tap to turn it off with Secure me"
+                                com.orion.store.platform.Verifier.State.OFF -> "Off, sideloading is protected. Tap to revert"
+                                else -> "Not on this phone"
+                            }, onClick = { vm.haptic(H.LIGHT); vm.openVerifier() }) { Chevron() }
+                            Toggle(Sym.Shield, "Protection shield", "Show the shield in the header. It opens Secure me and Revert in one tap", s.verifierBadge) { vm.set { it.copy(verifierBadge = !it.verifierBadge) } }
                         }
                         Section("Recovery") {
                             SRow(Sym.Sync, "Force rescan packages", "Reload every installed app list", onClick = { vm.reload(); vm.scheduleInstalledSync(); vm.close(Overlay.SETTINGS) })
@@ -677,9 +686,18 @@ private fun Hub(vm: MainViewModel, s: Settings, d: DataState, active: Int, ready
     val cs = MaterialTheme.colorScheme
     fun cat(id: String) = CATS.first { it.id == id }
     Column(Modifier.fillMaxSize().background(cs.surface).readableWidth().verticalScroll(rememberScrollState()).readableWidth().windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(bottom = 32.dp)) {
-        Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp)) {
-            Text("Settings", style = MaterialTheme.typography.displaySmallEmphasized)
-            Text("Orion Store v$STORE_VERSION · ${vm.allApps().size} apps in catalog", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+        Row(Modifier.padding(start = 24.dp, end = 16.dp, top = 24.dp), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text("Settings", style = MaterialTheme.typography.displaySmallEmphasized)
+                Text("Orion Store v$STORE_VERSION · ${vm.allApps().size} apps in catalog", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+            }
+            // Announcements already read leave the header; the latest one stays readable here until a new one arrives
+            val ann = vm.config?.announcement?.takeIf { it.isNotBlank() }
+            var showAnn by remember { mutableStateOf(false) }
+            if (ann != null) IconButton({ vm.haptic(H.LIGHT); showAnn = true }) { Icon(Sym.Campaign, "Last announcement", tint = cs.onSurfaceVariant) }
+            if (showAnn && ann != null) AlertDialog({ showAnn = false }, icon = { Icon(Sym.Campaign, null) }, title = { Text("From the Orion team") },
+                text = { Text(ann, Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
+                confirmButton = { TextButton({ showAnn = false; vm.dismissAnnouncement() }) { Text("Got it") } })
         }
         var editing by remember { mutableStateOf(false) }
         HubHeader("Quick toggles") { IconButton({ editing = true }) { Icon(Sym.Edit, "Edit quick toggles", tint = cs.primary) } }
@@ -1242,7 +1260,7 @@ private fun FontSheet(vm: MainViewModel, s: Settings, error: String?, importing:
 
 /** One-time guided setup for direct installs: Wi-Fi, Developer options, then pairing through the notification shade. */
 @Composable
-private fun DirectInstallSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
+internal fun DirectInstallSheet(vm: MainViewModel, onDismiss: () -> Unit) = OrionSheet(onDismiss) {
     val ctx = LocalContext.current; val close = LocalSheetClose.current
     val st by WirelessAdb.status.collectAsState()
     var wifi by remember { mutableStateOf(WirelessAdb.onWifi(ctx)) }; var dev by remember { mutableStateOf(WirelessAdb.devOptions(ctx)) }

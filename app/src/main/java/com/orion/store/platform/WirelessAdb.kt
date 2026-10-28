@@ -26,6 +26,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -107,6 +108,8 @@ object WirelessAdb {
     private fun global(ctx: Context, key: String) = runCatching { Settings.Global.getInt(ctx.contentResolver, key, 0) == 1 }.getOrDefault(false)
     fun devOptions(ctx: Context) = global(ctx, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED)
     fun wirelessOn(ctx: Context) = global(ctx, ADB_WIFI)
+    /** Orion has reached adbd before (pairing done), so connecting is worth a try. */
+    fun paired(ctx: Context) = prefs(ctx).getInt("port", 0) > 0
     private fun canToggle(ctx: Context) = ctx.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 
     private fun aboutPhoneIntent(): Intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -162,8 +165,9 @@ object WirelessAdb {
         s.openInputStream().bufferedReader().readText()
     }
 
-    suspend fun install(ctx: Context, f: File) = withContext(Dispatchers.IO) {
-        val cmd = "pm install -r -S ${f.length()}"
+    /** [opts]: Beyond install picks; the shell user may pass every pm install switch, same as root and Shizuku. */
+    suspend fun install(ctx: Context, f: File, opts: Collection<String>? = null) = withContext(Dispatchers.IO) {
+        val cmd = "pm install -r${opts?.let { com.orion.store.data.installArgs(it, Build.VERSION.SDK_INT, "") }.orEmpty()} -S ${f.length()}"
         val pi = runCatching { ctx.packageManager.getPackageArchiveInfo(f.absolutePath, 0) }.getOrNull()
         val t0 = System.currentTimeMillis()
         connect(ctx)
@@ -192,12 +196,18 @@ object WirelessAdb {
         if ("Success" !in out) throw NativeError(out.trim().ifEmpty { "INSTALL_FAILED" })
     }
 
-    /** Runs one shell command over ADB as the shell user, reconnecting once on a stale socket. */
-    suspend fun shell(ctx: Context, cmd: String): String = withContext(Dispatchers.IO) {
+    /** Runs one shell command over ADB as the shell user, reconnecting once on a stale socket. A reply adbd never closes is cut off after [ms]. */
+    suspend fun shell(ctx: Context, cmd: String, ms: Long = 20_000): String = withContext(Dispatchers.IO) {
         connect(ctx)
-        try { exec(mgr(ctx), cmd) } catch (_: Exception) {
-            runCatching { mgr(ctx).disconnect() }; connect(ctx); exec(mgr(ctx), cmd)
+        val reply = scope.async {
+            runCatching {
+                try { exec(mgr(ctx), cmd) } catch (_: Exception) {
+                    runCatching { mgr(ctx).disconnect() }; connect(ctx); exec(mgr(ctx), cmd)
+                }
+            }
         }
+        withTimeoutOrNull(ms) { reply.await() }?.getOrThrow()
+            ?: run { runCatching { mgr(ctx).disconnect() }; throw NativeError("Wireless debugging stopped answering. Try again.") }
     }
 
     // ---------------- Guided setup ----------------

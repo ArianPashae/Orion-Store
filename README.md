@@ -387,7 +387,7 @@ The project lives across a few public surfaces:
 
 ## Credits
 
-- **[Install with Options](https://github.com/zacharee/InstallWithOptions)** by Zachary Wander (MIT): Orion's "Install with options" sheet is inspired by its set of install options. Orion's version is its own implementation on top of `pm install`.
+- **[Install with Options](https://github.com/zacharee/InstallWithOptions)** by Zachary Wander (MIT): Orion's "Beyond install" sheet is inspired by its set of install options. Orion's version is its own implementation on top of `pm install`.
 - **[Dhizuku](https://github.com/iamr0s/Dhizuku)** and the **[Dhizuku API](https://github.com/iamr0s/Dhizuku-API)** by iamr0s (MIT): device owner installs and uninstalls.
 - **[Shizuku](https://github.com/RikkaApps/Shizuku)** by RikkaApps: silent installs and the Guardian tools.
 - **[Universal Android Debloater Next Generation](https://github.com/Universal-Debloater-Alliance/universal-android-debloater-next-generation)**: the package notes and removal ratings behind Debloat.

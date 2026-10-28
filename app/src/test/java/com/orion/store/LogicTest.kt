@@ -1,6 +1,7 @@
 package com.orion.store
 
 import com.orion.store.data.*
+import com.orion.store.platform.ApkInsights
 import com.orion.store.platform.Verifier
 import com.orion.store.ui.bundleIssueBody
 import com.orion.store.ui.cleanPermName
@@ -13,12 +14,75 @@ import org.junit.Test
 class LogicTest {
     @Test fun verifierCommands() {
         // Every destructive command must stay scoped to the current user: a bare pm disable/uninstall would hit all users and can brick.
-        Verifier.DISABLE_CMDS.filter { it.startsWith("pm ") }.forEach { assertTrue(it, "--user 0" in it) }
-        assertTrue(Verifier.UNINSTALL_CMD.contains("--user 0") && Verifier.UNINSTALL_CMD.endsWith(Verifier.PKG))
+        (listOf(Verifier.DISABLE_CMD, Verifier.UNINSTALL_CMD) + Verifier.RESTORE_CMDS).forEach { assertTrue(it, "--user 0" in it && it.endsWith(Verifier.PKG)) }
+        // Uninstall keeps the APK (-k), so Revert's install-existing can bring the component back
+        assertTrue(" -k " in Verifier.UNINSTALL_CMD)
+        assertTrue(Verifier.RESTORE_CMDS.first().contains("install-existing") && Verifier.RESTORE_CMDS.last().startsWith("pm enable"))
         // Documented global keys, set to their off values
-        assertTrue(Verifier.DISABLE_CMDS.contains("settings put global package_verifier_enable 0"))
-        assertTrue(Verifier.DISABLE_CMDS.contains("settings put global verifier_verify_adb_installs 0"))
-        assertTrue(Verifier.DISABLE_CMDS.last().endsWith(Verifier.PKG))
+        assertEquals("0", Verifier.GLOBALS.toMap()["package_verifier_enable"])
+        assertEquals("0", Verifier.GLOBALS.toMap()["verifier_verify_adb_installs"])
+        assertEquals("-1", Verifier.GLOBALS.toMap()["package_verifier_user_consent"])
+    }
+
+    @Test fun verifierRefusal() {
+        // Success lines are not refusals
+        assertNull(Verifier.refusal("Package com.google.android.verifier new state: disabled-user\n"))
+        assertNull(Verifier.refusal("Success\n\n"))
+        // pm prints why it refused; the popup shows that reason
+        assertEquals("Cannot disable a protected package: com.google.android.verifier",
+            Verifier.refusal("Exception occurred while executing 'disable-user':\njava.lang.SecurityException: Cannot disable a protected package: com.google.android.verifier\n"))
+        assertEquals("Failure [DELETE_FAILED_INTERNAL_ERROR]", Verifier.refusal("Failure [DELETE_FAILED_INTERNAL_ERROR]"))
+        assertEquals("Shell cannot change component state", Verifier.refusal("Error: Shell cannot change component state."))
+    }
+
+    @Test fun apkFrameworksAndTrackers() {
+        val flutter = listOf("lib/arm64-v8a/libflutter.so", "lib/arm64-v8a/libapp.so", "classes.dex")
+        assertEquals(listOf("Flutter"), ApkInsights.frameworks(flutter, emptySet()))
+        val rn = listOf("lib/arm64-v8a/libreactnativejni.so", "lib/arm64-v8a/libhermes.so")
+        assertEquals(listOf("React Native (Hermes)", "Kotlin"), ApkInsights.frameworks(rn, setOf("kotlin/collections")))
+        assertEquals(listOf("Unity (IL2CPP)"), ApkInsights.frameworks(listOf("lib/armeabi-v7a/libunity.so", "lib/armeabi-v7a/libil2cpp.so"), emptySet()))
+        assertEquals(listOf("Jetpack Compose", "Kotlin"), ApkInsights.frameworks(listOf("classes.dex"), setOf("androidx/compose/runtime/internal", "kotlin")))
+        // A package that merely starts with the same letters is not the framework
+        assertTrue(ApkInsights.frameworks(listOf("classes.dex"), setOf("kotlinx/coroutines")).isEmpty())
+        assertEquals(setOf("AppsFlyer" to "Attribution", "Google AdMob" to "Ads"),
+            ApkInsights.trackers(setOf("com/appsflyer/internal", "com/google/android/gms/ads/rewarded", "com/example/app")).toSet())
+        assertTrue(ApkInsights.trackers(setOf("com/appsflyerclone", "io/branchy")).isEmpty())
+        assertEquals("FFmpeg", ApkInsights.knownLib("libavcodec.so")); assertNull(ApkInsights.knownLib("libzzz.so"))
+        assertEquals("Code", ApkInsights.sizeGroup("classes2.dex")); assertEquals("Resources", ApkInsights.sizeGroup("resources.arsc"))
+        assertEquals("Native libraries", ApkInsights.sizeGroup("lib/x86_64/liba.so")); assertEquals("Other", ApkInsights.sizeGroup("META-INF/CERT.RSA"))
+        assertEquals("14", ApkInsights.androidName(34)); assertEquals("12L", ApkInsights.androidName(32)); assertEquals("10", ApkInsights.androidName(29)); assertEquals("16", ApkInsights.androidName(36))
+        assertEquals("Read contacts", ApkInsights.permLabel("android.permission.READ_CONTACTS"))
+    }
+
+    @Test fun elfAlignment() {
+        fun elf64(vararg aligns: Long): ByteArray {
+            val b = java.nio.ByteBuffer.allocate(64 + 56 * aligns.size).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            b.put(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte(), 2, 1))
+            b.putLong(0x20, 64); b.putShort(0x36, 56); b.putShort(0x38, aligns.size.toShort())
+            aligns.forEachIndexed { i, a -> b.putInt(64 + 56 * i, 1); b.putLong(64 + 56 * i + 0x30, a) }
+            return b.array()
+        }
+        assertEquals(16_384L, ApkInsights.elfLoadAlign(elf64(65_536, 16_384)))
+        assertEquals(4_096L, ApkInsights.elfLoadAlign(elf64(16_384, 4_096)))
+        assertNull(ApkInsights.elfLoadAlign(ByteArray(80)))
+        // Program headers cut off by the read limit: what was read still counts, nothing crashes
+        assertEquals(65_536L, ApkInsights.elfLoadAlign(elf64(65_536, 4_096).copyOf(64 + 56 + 10)))
+    }
+
+    @Test fun dexTypeTable() {
+        val names = listOf("Lcom/appsflyer/AppsFlyerLib;", "I", "Lkotlin/Unit;", "LTopLevel;")
+        val data = java.io.ByteArrayOutputStream(); val offs = ArrayList<Int>()
+        val dataStart = 0x70 + names.size * 8
+        names.forEach { n -> offs += dataStart + data.size(); data.write(n.length); data.write(n.toByteArray()); data.write(0) }
+        val b = java.nio.ByteBuffer.allocate(dataStart + data.size()).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        b.put("dex\n035\u0000".toByteArray())
+        b.putInt(0x38, names.size); b.putInt(0x3C, 0x70); b.putInt(0x40, names.size); b.putInt(0x44, 0x70 + names.size * 4)
+        offs.forEachIndexed { i, o -> b.putInt(0x70 + 4 * i, o); b.putInt(0x70 + names.size * 4 + 4 * i, i) }
+        b.position(dataStart); b.put(data.toByteArray())
+        val pk = HashSet<String>()
+        assertEquals(3, ApkInsights.dexPackages(b.array(), pk))
+        assertEquals(setOf("com/appsflyer", "kotlin"), pk)
+        assertEquals(0, ApkInsights.dexPackages(ByteArray(200), HashSet()))
     }
 
     @Test fun versions() {
